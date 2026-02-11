@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import streamlit as st
-from confluent_kafka import Producer, Consumer, KafkaError
+from confluent_kafka import Producer, Consumer, TopicPartition, KafkaError
 
 
 # ── Kafka config ───────────────────────────────────────────────────────────────
@@ -82,15 +82,39 @@ def produce_transaction(txn: dict):
     producer.flush(timeout=5)
 
 
-def poll_for_alert(event_id: str, timeout_s: int = ALERT_POLL_TIMEOUT_S) -> Optional[dict]:
-    """Consume from alerts topic until we find the matching alert or timeout."""
+def create_alert_consumer() -> Consumer:
+    """Create a consumer assigned to all alert partitions, seeked to the end.
+
+    Uses assign() instead of subscribe() to skip the consumer group protocol
+    (join/rebalance), which can take several seconds and cause a race condition.
+    """
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": f"ui-alert-listener-{uuid.uuid4()}",
         "auto.offset.reset": "latest",
     })
-    consumer.subscribe([ALERTS_TOPIC])
 
+    # Get partition metadata and assign directly
+    metadata = consumer.list_topics(ALERTS_TOPIC, timeout=5)
+    partitions = [
+        TopicPartition(ALERTS_TOPIC, p)
+        for p in metadata.topics[ALERTS_TOPIC].partitions
+    ]
+    consumer.assign(partitions)
+
+    # poll() once to finalize partition assignment before seeking
+    consumer.poll(timeout=1.0)
+
+    # Seek each partition to the end so we only read new messages
+    for tp in partitions:
+        _, high = consumer.get_watermark_offsets(tp, timeout=5)
+        consumer.seek(TopicPartition(ALERTS_TOPIC, tp.partition, high))
+
+    return consumer
+
+
+def poll_for_alert(consumer: Consumer, event_id: str, timeout_s: int = ALERT_POLL_TIMEOUT_S) -> Optional[dict]:
+    """Poll the pre-assigned consumer until we find the matching alert or timeout."""
     deadline = time.time() + timeout_s
 
     try:
@@ -161,29 +185,39 @@ if st.button("Submit Transaction", type="primary", use_container_width=True):
         "source": "ui",
     }
 
+    # Set up consumer BEFORE producing so it's ready to catch the alert
+    alert_consumer = create_alert_consumer()
+
     produce_transaction(txn)
 
     with st.spinner("Processing transaction..."):
-        alert = poll_for_alert(event_id)
+        alert = poll_for_alert(alert_consumer, event_id)
 
     if alert is None:
         st.warning("Timed out waiting for alert. Make sure the processor and alert service are running.")
     else:
         severity = alert["severity"]
-        style = SEVERITY_STYLE[severity]
 
         st.divider()
-        st.subheader("Fraud Analysis Result")
 
-        # Severity + Action header
-        st.markdown(
-            f"### :{style['icon']}: "
-            f"<span style='color:{style['color']}'>{severity}</span> "
-            f"&mdash; {alert['action'].replace('_', ' ').title()}",
-            unsafe_allow_html=True,
-        )
+        if severity == "INFO":
+            st.success("Transaction submitted successfully. No fraud signals detected.")
+
+        elif severity == "WARNING":
+            st.warning(
+                "This transaction looks suspicious. "
+                "It has been flagged for review."
+            )
+
+        elif severity == "CRITICAL":
+            st.error(
+                "This transaction looks fraudulent. "
+                "The card has been blocked and the user has been alerted."
+            )
 
         # Details
+        st.subheader("Analysis Details")
+
         result_col1, result_col2 = st.columns(2)
 
         with result_col1:
@@ -192,15 +226,13 @@ if st.button("Submit Transaction", type="primary", use_container_width=True):
 
         with result_col2:
             st.metric("Card", alert["card_id"])
-            st.metric("Alert ID", alert["alert_id"][:8] + "...")
+            st.metric("Risk Score", alert.get("risk_score", "N/A"))
 
         # Reasons
         if alert["reasons"]:
             st.markdown("**Triggered Signals:**")
             for reason in alert["reasons"]:
                 st.markdown(f"- `{reason}`")
-        else:
-            st.markdown("**No fraud signals triggered.**")
 
         # Raw JSON
         with st.expander("Raw Alert Event"):

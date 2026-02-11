@@ -40,6 +40,7 @@ def build_alert(risk_event: dict) -> dict:
         "risk_event_id": risk_event["risk_event_id"],
         "transaction_event_id": risk_event["transaction_event_id"],
         "card_id": risk_event["card_id"],
+        "risk_score": risk_event["risk_score"],
         "severity": severity.value,
         "action": action.value,
         "reasons": risk_event["reasons"],

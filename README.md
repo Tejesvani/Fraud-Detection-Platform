@@ -1,24 +1,32 @@
 # Fraud Detection Platform
 
-A real-time fraud detection system built on Apache Kafka. Simulated card transactions are streamed through a pipeline that evaluates each transaction for fraud signals and produces risk scores in real time.
+A real-time fraud detection system built on Apache Kafka. Simulated card transactions are streamed through a pipeline that evaluates each transaction for fraud signals, produces risk scores, and emits alerts — all in real time. Includes a Streamlit UI for manual transaction submission.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────┐       ┌───────────────┐       ┌──────────────────────┐
-│ Transaction Streamer│──────>│  Kafka Broker  │──────>│ Risk Score Processor │
-│     (Producer)      │ topic:│  (Docker)      │ topic:│ (Consumer + Producer)│
-│                     │ trans-│                │ risk_ │                      │
-│ Generates synthetic │ action│  localhost:9092│ scores│ Scores each txn and  │
-│ card transactions   │   s   │                │       │ emits risk events    │
-└─────────────────────┘       └───────────────┘       └──────────────────────┘
+                                         Kafka Broker (localhost:9092)
+                                    ┌─────────────────────────────────────┐
+                                    │                                     │
+┌─────────────────────┐  topic:     │  transactions   risk_scores  alerts │     ┌────────────────┐
+│ Transaction Streamer│──────────>──│─────┬──────────────┬────────────┬───│──>──│  Streamlit UI  │
+│     (Producer)      │ transactions│     │              │            │   │     │  (Frontend)    │
+└─────────────────────┘             │     ▼              ▼            │   │     │                │
+                                    │  ┌──────────┐  ┌───────────┐   │   │     │ Submits txns,  │
+┌─────────────────────┐             │  │Risk Score│──│  Alert    │───┘   │     │ polls alerts,  │
+│   Streamlit UI      │──────────>──│  │Processor │  │  Service  │       │     │ shows results  │
+│   (Frontend)        │ transactions│  └──────────┘  └───────────┘       │     └────────────────┘
+└─────────────────────┘             │                                     │
+                                    └─────────────────────────────────────┘
 ```
 
 **Data flow:**
 1. `transaction_streamer.py` generates one synthetic transaction every 2 seconds and publishes it to the `transactions` topic.
 2. `risk_score_processor.py` consumes from `transactions`, evaluates each event against fraud signals, and produces an immutable risk event to the `risk_scores` topic.
+3. `alert_service.py` consumes from `risk_scores`, maps each risk label to a severity and action, and produces an alert event to the `alerts` topic.
+4. The Streamlit UI can also submit transactions. It produces to `transactions` (with `"source": "ui"`), then polls `alerts` for the matching result.
 
 ---
 
@@ -35,7 +43,12 @@ fraud-detection-platform/
 │   └── transaction_streamer.py     # Kafka producer — synthetic transaction generator
 ├── processor/
 │   └── risk_score_processor.py     # Kafka consumer/producer — risk scoring engine
+├── consumer/
+│   └── alert_service.py            # Kafka consumer/producer — alert emitter
+├── frontend/
+│   └── app.py                      # Streamlit UI — manual transaction submission
 ├── venv/                           # Python 3.9 virtual environment
+├── .gitignore
 └── README.md
 ```
 
@@ -43,11 +56,11 @@ fraud-detection-platform/
 
 ## Kafka Topics
 
-| Topic          | Partitions | Purpose                                       |
-|----------------|------------|-----------------------------------------------|
-| `transactions` | 3          | Raw card transaction events from the streamer |
-| `risk_scores`  | 3          | Scored risk events from the processor         |
-| `alerts`       | 1          | Reserved for future alerting system           |
+| Topic          | Partitions | Purpose                                            |
+|----------------|------------|----------------------------------------------------|
+| `transactions` | 3          | Raw card transaction events from streamer and UI   |
+| `risk_scores`  | 3          | Scored risk events from the processor              |
+| `alerts`       | 1          | Alert events with severity and action              |
 
 ---
 
@@ -55,7 +68,7 @@ fraud-detection-platform/
 
 ### Transaction Event (topic: `transactions`)
 
-Produced by `transaction_streamer.py`. Keyed by `card_id`.
+Produced by `transaction_streamer.py` and the Streamlit UI. Keyed by `card_id`.
 
 ```json
 {
@@ -66,33 +79,33 @@ Produced by `transaction_streamer.py`. Keyed by `card_id`.
   "merchant_category": "e-commerce",
   "amount": 1245.50,
   "country": "NG",
-  "device_id": "device_012"
+  "device_id": "device_012",
+  "source": "ui"
 }
 ```
 
-**Fields:**
-
-| Field              | Type   | Description                                   |
-|--------------------|--------|-----------------------------------------------|
-| `event_id`         | UUID   | Unique identifier for this transaction        |
-| `timestamp`        | ISO-8601 | UTC time the transaction was created        |
-| `card_id`          | string | Card used (`card1` through `card10`)          |
-| `transaction_type` | enum   | One of the six transaction types (see below)  |
-| `merchant_category`| string | Category of the merchant                      |
-| `amount`           | float  | Transaction amount in USD                     |
-| `country`          | string | Two-letter country code                       |
-| `device_id`        | string | Device used for the transaction               |
+| Field              | Type     | Description                                            |
+|--------------------|----------|--------------------------------------------------------|
+| `event_id`         | UUID     | Unique identifier for this transaction                 |
+| `timestamp`        | ISO-8601 | UTC time the transaction was created                   |
+| `card_id`          | string   | Card used (`card1` through `card10`)                   |
+| `transaction_type` | enum     | One of the six transaction types (see below)           |
+| `merchant_category`| string   | Category of the merchant                               |
+| `amount`           | float    | Transaction amount in USD                              |
+| `country`          | string   | Two-letter country code                                |
+| `device_id`        | string   | Device used for the transaction                        |
+| `source`           | string   | `"ui"` when submitted from the frontend (optional)     |
 
 **Transaction types (enum):**
 
-| Enum Value             | Examples                    | Fraud Relevance       |
-|------------------------|-----------------------------|-----------------------|
-| `pos_purchase`         | grocery, fuel               | Common baseline       |
-| `online_purchase`      | e-commerce, digital goods   | Higher fraud risk     |
-| `subscription`         | streaming, SaaS             | Small, repeated       |
-| `high_value_retail`    | electronics, jewelry        | Fraud-prone           |
-| `atm_withdrawal`       | cash                        | Different pattern     |
-| `international_purchase`| travel, duty-free          | Geographic risk       |
+| Enum Value              | Examples                  | Fraud Relevance     |
+|-------------------------|---------------------------|---------------------|
+| `pos_purchase`          | grocery, fuel             | Common baseline     |
+| `online_purchase`       | e-commerce, digital goods | Higher fraud risk   |
+| `subscription`          | streaming, SaaS           | Small, repeated     |
+| `high_value_retail`     | electronics, jewelry      | Fraud-prone         |
+| `atm_withdrawal`        | cash                      | Different pattern   |
+| `international_purchase`| travel, duty-free         | Geographic risk     |
 
 ### Risk Score Event (topic: `risk_scores`)
 
@@ -110,17 +123,45 @@ Produced by `risk_score_processor.py`. Keyed by `card_id`. Each event is immutab
 }
 ```
 
-**Fields:**
+| Field                  | Type     | Description                                    |
+|------------------------|----------|------------------------------------------------|
+| `risk_event_id`        | UUID     | Unique identifier for this risk evaluation     |
+| `transaction_event_id` | UUID     | References the original transaction `event_id` |
+| `card_id`              | string   | Card that was evaluated                        |
+| `risk_score`           | float    | Score between 0.0 and 1.0 (capped)            |
+| `risk_label`           | enum     | `LOW`, `MEDIUM`, or `HIGH`                     |
+| `reasons`              | string[] | List of triggered signal names                 |
+| `evaluated_at`         | ISO-8601 | UTC time the scoring was performed             |
 
-| Field                  | Type       | Description                                           |
-|------------------------|------------|-------------------------------------------------------|
-| `risk_event_id`        | UUID       | Unique identifier for this risk evaluation            |
-| `transaction_event_id` | UUID       | References the original transaction `event_id`        |
-| `card_id`              | string     | Card that was evaluated                               |
-| `risk_score`           | float      | Score between 0.0 and 1.0 (capped)                    |
-| `risk_label`           | enum       | `LOW`, `MEDIUM`, or `HIGH`                            |
-| `reasons`              | string[]   | List of triggered signal names                        |
-| `evaluated_at`         | ISO-8601   | UTC time the scoring was performed                    |
+### Alert Event (topic: `alerts`)
+
+Produced by `alert_service.py`. Keyed by `card_id`. Each event is immutable and auditable.
+
+```json
+{
+  "alert_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "risk_event_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "transaction_event_id": "550e8400-e29b-41d4-a716-446655440000",
+  "card_id": "card9",
+  "risk_score": 0.7,
+  "severity": "CRITICAL",
+  "action": "BLOCK_CARD",
+  "reasons": ["HIGH_AMOUNT", "FOREIGN_COUNTRY"],
+  "created_at": "2026-02-08T18:08:08.234567+00:00"
+}
+```
+
+| Field                  | Type     | Description                                    |
+|------------------------|----------|------------------------------------------------|
+| `alert_id`             | UUID     | Unique identifier for this alert               |
+| `risk_event_id`        | UUID     | References the risk event                      |
+| `transaction_event_id` | UUID     | References the original transaction            |
+| `card_id`              | string   | Card that triggered the alert                  |
+| `risk_score`           | float    | The computed risk score                        |
+| `severity`             | enum     | `INFO`, `WARNING`, or `CRITICAL`               |
+| `action`               | enum     | `LOG_ONLY`, `REVIEW_TRANSACTION`, or `BLOCK_CARD` |
+| `reasons`              | string[] | List of triggered signal names                 |
+| `created_at`           | ISO-8601 | UTC time the alert was created                 |
 
 ---
 
@@ -160,6 +201,18 @@ The processor evaluates each transaction against four weighted signals. The scor
 
 ---
 
+## Alerting
+
+The alert service maps each risk label to a severity and action:
+
+| Risk Label | Severity   | Action               | UI Message                                      |
+|------------|------------|----------------------|-------------------------------------------------|
+| `LOW`      | `INFO`     | `LOG_ONLY`           | Transaction submitted successfully               |
+| `MEDIUM`   | `WARNING`  | `REVIEW_TRANSACTION` | Transaction looks suspicious, flagged for review |
+| `HIGH`     | `CRITICAL` | `BLOCK_CARD`         | Transaction looks fraudulent, card blocked       |
+
+---
+
 ## Prerequisites
 
 - **Docker** (for Kafka and Zookeeper)
@@ -179,7 +232,7 @@ source venv/bin/activate
 ### 2. Install Dependencies
 
 ```bash
-pip install confluent-kafka
+pip install confluent-kafka streamlit
 ```
 
 ### 3. Start Kafka
@@ -224,6 +277,25 @@ You will see color-coded risk evaluations printed for each incoming transaction:
 - Yellow `[MEDIUM]` -- one signal triggered
 - Red `[HIGH  ]` -- multiple signals triggered
 
+### 7. Start the Alert Service (Terminal 3)
+
+```bash
+venv/bin/python consumer/alert_service.py
+```
+
+You will see color-coded alerts:
+- Green `[INFO    ]` -- LOG_ONLY
+- Yellow `[WARNING ]` -- REVIEW_TRANSACTION
+- Red `[CRITICAL]` -- BLOCK_CARD
+
+### 8. Start the Streamlit UI (Terminal 4)
+
+```bash
+streamlit run frontend/app.py
+```
+
+Opens at `http://localhost:8501`. Submit a transaction and see the fraud analysis result in real time.
+
 ---
 
 ## Inspecting Kafka Streams
@@ -254,6 +326,15 @@ docker exec kafka kafka-console-consumer \
   --from-beginning
 ```
 
+### Read alerts from the beginning
+
+```bash
+docker exec kafka kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic alerts \
+  --from-beginning
+```
+
 ### Read with keys displayed
 
 ```bash
@@ -274,6 +355,13 @@ docker exec kafka kafka-consumer-groups \
   --describe
 ```
 
+```bash
+docker exec kafka kafka-consumer-groups \
+  --bootstrap-server localhost:9092 \
+  --group alert-service-group \
+  --describe
+```
+
 ### Delete and recreate topics (reset)
 
 ```bash
@@ -285,8 +373,9 @@ bash kafka/create-topics.sh
 
 ## Stopping
 
-1. Press `Ctrl+C` in both the streamer and processor terminals.
-2. Shut down Kafka:
+1. Press `Ctrl+C` in the streamer, processor, and alert service terminals.
+2. Stop the Streamlit UI with `Ctrl+C`.
+3. Shut down Kafka:
 
 ```bash
 cd kafka-local
@@ -295,12 +384,15 @@ docker compose down
 
 ---
 
-## What's Completed (Phase 1)
+## What's Completed
 
 - [x] Local Kafka infrastructure (Zookeeper + Broker via Docker)
-- [x] Topic creation and management scripts
+- [x] Topic creation and management scripts (`transactions`, `risk_scores`, `alerts`)
 - [x] Transaction streamer (producer) with realistic synthetic data
 - [x] Fraud pattern injection (high-value, foreign, new device, ATM anomaly)
 - [x] Risk score processor (consumer/producer) with weighted signal scoring
 - [x] Immutable risk event schema emitted to `risk_scores` topic
-- [x] Color-coded console output for real-time monitoring
+- [x] Alert service (consumer/producer) with severity/action mapping
+- [x] Immutable alert event schema emitted to `alerts` topic
+- [x] Streamlit UI for manual transaction submission with real-time fraud analysis
+- [x] Color-coded console output across all services
