@@ -14,10 +14,10 @@ A real-time fraud detection system built on Apache Kafka. Simulated card transac
 │ Transaction Streamer│──────────>──│─────┬──────────────┬────────────┬───│──>──│  Streamlit UI  │
 │     (Producer)      │ transactions│     │              │            │   │     │  (Frontend)    │
 └─────────────────────┘             │     ▼              ▼            │   │     │                │
-                                    │  ┌──────────┐  ┌───────────┐   │   │     │ Submits txns,  │
-┌─────────────────────┐             │  │Risk Score│──│  Alert    │───┘   │     │ polls alerts,  │
-│   Streamlit UI      │──────────>──│  │Processor │  │  Service  │       │     │ shows results  │
-│   (Frontend)        │ transactions│  └──────────┘  └───────────┘       │     └────────────────┘
+                                    │  ┌──────────┐  ┌───────────┐    │   │     │ Submits txns,  │
+┌─────────────────────┐             │  │Risk Score│──│  Alert    │───-┘   │     │ polls alerts,  │
+│   Streamlit UI      │──────────>──│  │Processor │  │  Service  │        │     │ shows results  │
+│   (Frontend)        │ transactions│  └──────────┘  └───────────┘        │     └────────────────┘
 └─────────────────────┘             │                                     │
                                     └─────────────────────────────────────┘
 ```
