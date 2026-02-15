@@ -35,3 +35,20 @@ services:
 
       # Disable auto topic creation (best practice)
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: fraud_user
+      POSTGRES_PASSWORD: fraud_password
+      POSTGRES_DB: fraud_detection_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+
+volumes:
+  postgres_data:
