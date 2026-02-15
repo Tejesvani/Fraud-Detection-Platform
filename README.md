@@ -7,26 +7,46 @@ A real-time fraud detection system built on Apache Kafka. Simulated card transac
 ## Architecture
 
 ```
-                                         Kafka Broker (localhost:9092)
-                                    ┌─────────────────────────────────────┐
-                                    │                                     │
-┌─────────────────────┐  topic:     │  transactions   risk_scores  alerts │     ┌────────────────┐
-│ Transaction Streamer│──────────>──│─────┬──────────────┬────────────┬───│──>──│  Streamlit UI  │
-│     (Producer)      │ transactions│     │              │            │   │     │  (Frontend)    │
-└─────────────────────┘             │     ▼              ▼            │   │     │                │
-                                    │  ┌──────────┐  ┌───────────┐    │   │     │ Submits txns,  │
-┌─────────────────────┐             │  │Risk Score│──│  Alert    │───-┘   │     │ polls alerts,  │
-│   Streamlit UI      │──────────>──│  │Processor │  │  Service  │        │     │ shows results  │
-│   (Frontend)        │ transactions│  └──────────┘  └───────────┘        │     └────────────────┘
-└─────────────────────┘             │                                     │
-                                    └─────────────────────────────────────┘
+  PRODUCERS                    KAFKA BROKER (localhost:9092)              CONSUMERS
+  ─────────                   ┌───────────────────────────┐              ─────────
+                              │                           │
+┌──────────────────┐          │  ┌─────────────────────┐  │          ┌──────────────────────┐
+│                  │ produce  │  │                     │  │ consume  │                      │
+│   Transaction    │─────────>│──│    transactions     │──│─────────>│  Risk Score          │
+│   Streamer       │          │  │    (3 partitions)   │  │          │  Processor           │
+│                  │          │  │                     │  │          │                      │
+└──────────────────┘          │  │          ▲          │  │          └──────────────────────┘
+                              │  └──────────│──────────┘  │                    │
+┌──────────────────┐ produce  │             │             │                    │
+│                  │──────────│─────────────┘             │                    │
+│   Streamlit UI   │          │                           │                    │ produce
+│   (Frontend)     │          │  ┌─────────────────────┐  │                    │
+│                  │          │  │                     │<─│────────────────────┘
+└────────┬─────────┘          │  │    risk_scores      │  │
+         │                    │  │    (3 partitions)   │  │          ┌──────────────────────┐
+         │                    │  │                     │──│─────────>│                      │
+         │                    │  └─────────────────────┘  │ consume  │  Alert Service       │
+         │                    │                           │          │                      │
+         │                    │                           │          └──────────────────────┘
+         │                    │  ┌─────────────────────┐  │                    │
+         │           poll     │  │                     │<─│────────────────────┘
+         └───────────────────<│──│    alerts           │  │            produce
+                    alerts    │  │    (1 partition)    │  │
+                              │  │                     │  │
+                              │  └─────────────────────┘  │
+                              │                           │
+                              └───────────────────────────┘
 ```
 
+The system is a Kafka-based event-driven fraud detection pipeline. It consists of two producers — a background Transaction Streamer and a user-facing Streamlit UI — both publishing transaction events to the Kafka `transactions` topic. A Risk Score Processor consumes from this topic, evaluates fraud risk, and publishes scored results to the `risk_scores` topic. An Alert Service then consumes from `risk_scores`, determines severity and required action, and publishes alert events to the `alerts` topic. The Streamlit UI monitors the `alerts` topic to retrieve the alert for the event produced from the frontend and display the final outcome to the user. All services communicate asynchronously via Kafka topics, ensuring decoupled, event-driven processing.
+
 **Data flow:**
-1. `transaction_streamer.py` generates one synthetic transaction every 2 seconds and publishes it to the `transactions` topic.
-2. `risk_score_processor.py` consumes from `transactions`, evaluates each event against fraud signals, and produces an immutable risk event to the `risk_scores` topic.
-3. `alert_service.py` consumes from `risk_scores`, maps each risk label to a severity and action, and produces an alert event to the `alerts` topic.
-4. The Streamlit UI can also submit transactions. It produces to `transactions` (with `"source": "ui"`), then polls `alerts` for the matching result.
+1. **Producers** publish transaction events to the `transactions` topic:
+   - `transaction_streamer.py` generates one synthetic transaction every 2 seconds.
+   - The Streamlit UI submits user transactions (with `"source": "ui"`).
+2. **Risk Score Processor** consumes from `transactions`, evaluates each event against fraud signals, and produces an immutable risk event to the `risk_scores` topic.
+3. **Alert Service** consumes from `risk_scores`, maps each risk label to a severity and action, and produces an alert event to the `alerts` topic.
+4. For UI-submitted transactions, the Streamlit UI polls the `alerts` topic, matches on `transaction_event_id`, and displays the fraud analysis result.
 
 ---
 
