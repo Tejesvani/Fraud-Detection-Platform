@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 import time
 from datetime import datetime, timezone
@@ -7,12 +8,18 @@ from typing import Optional
 import streamlit as st
 from confluent_kafka import Producer, Consumer, TopicPartition, KafkaError
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 # ── Kafka config ───────────────────────────────────────────────────────────────
 
-KAFKA_BROKER = "localhost:9092"
-TRANSACTIONS_TOPIC = "transactions"
-ALERTS_TOPIC = "alerts"
+KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+TRANSACTIONS_TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
+ALERTS_TOPIC = os.environ.get("KAFKA_TOPIC_ALERTS", "alerts")
 ALERT_POLL_TIMEOUT_S = 30
 
 # ── Reference data (mirrors producer) ─────────────────────────────────────────

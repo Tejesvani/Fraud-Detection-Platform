@@ -16,24 +16,15 @@ services:
     depends_on:
       - zookeeper
     ports:
-      - "9092:9092"
+      - "${KAFKA_PORT}:9092"
     environment:
-      # Broker identity
       KAFKA_BROKER_ID: 1
-
-      # Zookeeper connection
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-
-      # Listeners (important for localhost access)
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-
-      # Single-node friendly configs
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_ADVERTISED_HOST}:${KAFKA_PORT}
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-
-      # Disable auto topic creation (best practice)
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
 
   postgres:
@@ -41,11 +32,11 @@ services:
     container_name: postgres
     restart: always
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT}:5432"
     environment:
-      POSTGRES_USER: fraud_user
-      POSTGRES_PASSWORD: fraud_password
-      POSTGRES_DB: fraud_detection_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d

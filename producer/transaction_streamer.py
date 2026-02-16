@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import time
 import uuid
@@ -6,6 +7,12 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Producer
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 # ── Transaction type enum ──────────────────────────────────────────────────────
@@ -140,8 +147,8 @@ def generate_transaction() -> dict:
 
 # ── Kafka producer ─────────────────────────────────────────────────────────────
 
-KAFKA_BROKER = "localhost:9092"
-TOPIC = "transactions"
+KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
 
 
 def delivery_callback(err, msg):

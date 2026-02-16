@@ -1,6 +1,6 @@
 # Fraud Detection Platform
 
-A real-time fraud detection system built on Apache Kafka. Simulated card transactions are streamed through a pipeline that evaluates each transaction for fraud signals, produces risk scores, and emits alerts — all in real time. Includes a Streamlit UI for manual transaction submission.
+A real-time fraud detection system built on Apache Kafka. Simulated card transactions are streamed through a pipeline that evaluates each transaction for fraud signals, produces risk scores, and emits alerts — all in real time. All events are persisted to PostgreSQL. Includes a Streamlit UI for manual transaction submission.
 
 ---
 
@@ -18,8 +18,8 @@ A real-time fraud detection system built on Apache Kafka. Simulated card transac
 └──────────────────┘          │  │          ▲          │  │          └──────────────────────┘
                               │  └──────────│──────────┘  │                    │
 ┌──────────────────┐ produce  │             │             │                    │
-│                  │──────────│─────────────┘             │                    │
-│   Streamlit UI   │          │                           │                    │ produce
+│                  │──────────│─────────────┘             │                    │ produce
+│   Streamlit UI   │          │                           │                    │
 │   (Frontend)     │          │  ┌─────────────────────┐  │                    │
 │                  │          │  │                     │<─│────────────────────┘
 └────────┬─────────┘          │  │    risk_scores      │  │
@@ -36,9 +36,17 @@ A real-time fraud detection system built on Apache Kafka. Simulated card transac
                               │  └─────────────────────┘  │
                               │                           │
                               └───────────────────────────┘
+
+                                        │ consume (all 3 topics)
+                                        ▼
+                              ┌──────────────────────┐
+                              │                      │
+                              │  Persistence Service │──────> PostgreSQL
+                              │                      │        (fraud_detection_db)
+                              └──────────────────────┘
 ```
 
-The system is a Kafka-based event-driven fraud detection pipeline. It consists of two producers — a background Transaction Streamer and a user-facing Streamlit UI — both publishing transaction events to the Kafka `transactions` topic. A Risk Score Processor consumes from this topic, evaluates fraud risk, and publishes scored results to the `risk_scores` topic. An Alert Service then consumes from `risk_scores`, determines severity and required action, and publishes alert events to the `alerts` topic. The Streamlit UI monitors the `alerts` topic to retrieve the alert for the event produced from the frontend and display the final outcome to the user. All services communicate asynchronously via Kafka topics, ensuring decoupled, event-driven processing.
+The system is a Kafka-based event-driven fraud detection pipeline. It consists of two producers — a background Transaction Streamer and a user-facing Streamlit UI — both publishing transaction events to the Kafka `transactions` topic. A Risk Score Processor consumes from this topic, evaluates fraud risk, and publishes scored results to the `risk_scores` topic. An Alert Service then consumes from `risk_scores`, determines severity and required action, and publishes alert events to the `alerts` topic. The Streamlit UI monitors the `alerts` topic to retrieve the alert for the event produced from the frontend and display the final outcome to the user. A Persistence Service consumes from all three topics and writes every event to PostgreSQL for durable storage. All services communicate asynchronously via Kafka topics, ensuring decoupled, event-driven processing.
 
 **Data flow:**
 1. **Producers** publish transaction events to the `transactions` topic:
@@ -46,7 +54,8 @@ The system is a Kafka-based event-driven fraud detection pipeline. It consists o
    - The Streamlit UI submits user transactions (with `"source": "ui"`).
 2. **Risk Score Processor** consumes from `transactions`, evaluates each event against fraud signals, and produces an immutable risk event to the `risk_scores` topic.
 3. **Alert Service** consumes from `risk_scores`, maps each risk label to a severity and action, and produces an alert event to the `alerts` topic.
-4. For UI-submitted transactions, the Streamlit UI polls the `alerts` topic, matches on `transaction_event_id`, and displays the fraud analysis result.
+4. **Persistence Service** consumes from all three topics (`transactions`, `risk_scores`, `alerts`) and persists every event to PostgreSQL with idempotent inserts.
+5. For UI-submitted transactions, the Streamlit UI polls the `alerts` topic, matches on `transaction_event_id`, and displays the fraud analysis result.
 
 ---
 
@@ -55,7 +64,11 @@ The system is a Kafka-based event-driven fraud detection pipeline. It consists o
 ```
 fraud-detection-platform/
 ├── kafka-local/
-│   └── docker-compose.yml          # Spins up Zookeeper + Kafka broker
+│   ├── docker-compose.yml          # Spins up Zookeeper + Kafka broker + PostgreSQL
+│   └── postgres-init/
+│       └── init.sql                # Auto-creates PostgreSQL tables on first startup
+│   ├── .env 
+│   ├── .env.example  
 ├── kafka/
 │   ├── create-topics.sh            # Creates all Kafka topics
 │   └── delete-topics.sh            # Tears down all Kafka topics
@@ -64,13 +77,48 @@ fraud-detection-platform/
 ├── processor/
 │   └── risk_score_processor.py     # Kafka consumer/producer — risk scoring engine
 ├── consumer/
-│   └── alert_service.py            # Kafka consumer/producer — alert emitter
+│   ├── alert_service.py            # Kafka consumer/producer — alert emitter
+│   └── persistence_service.py      # Kafka consumer — persists all events to PostgreSQL
 ├── frontend/
 │   └── app.py                      # Streamlit UI — manual transaction submission
+├── .env                            # Environment variables (not committed — in .gitignore)
+├── .env.example                    # Template showing all available env vars
+├── requirements.txt                # Python dependencies (pinned versions)
 ├── venv/                           # Python 3.9 virtual environment
 ├── .gitignore
 └── README.md
 ```
+
+---
+
+## Environment Configuration
+
+All services read configuration from environment variables with sensible defaults. A `.env` file at the project root is loaded automatically via `python-dotenv`. The project works out-of-the-box without a `.env` file — all defaults match the local development setup.
+
+Copy `.env.example` to `.env` and adjust values for your environment:
+
+```bash
+cp .env.example .env
+```
+
+### Available Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker address |
+| `KAFKA_TOPIC_TRANSACTIONS` | `transactions` | Topic for raw transaction events |
+| `KAFKA_TOPIC_RISK_SCORES` | `risk_scores` | Topic for scored risk events |
+| `KAFKA_TOPIC_ALERTS` | `alerts` | Topic for alert events |
+| `KAFKA_GROUP_RISK_PROCESSOR` | `risk-score-processor-group` | Consumer group for risk processor |
+| `KAFKA_GROUP_ALERT_SERVICE` | `alert-service-group` | Consumer group for alert service |
+| `KAFKA_GROUP_PERSISTENCE` | `persistence-service-group` | Consumer group for persistence service |
+| `POSTGRES_USER` | `username` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | `password` | PostgreSQL password |
+| `POSTGRES_HOST` | `localhost` | PostgreSQL host |
+| `POSTGRES_PORT` | `5432` | PostgreSQL port |
+| `POSTGRES_DB` | `fraud_detection_db` | PostgreSQL database name |
+
+Docker Compose also reads from `.env` for Kafka and PostgreSQL container configuration.
 
 ---
 
@@ -185,6 +233,20 @@ Produced by `alert_service.py`. Keyed by `card_id`. Each event is immutable and 
 
 ---
 
+## PostgreSQL Schema
+
+The database is automatically initialized on first container startup via `kafka-local/postgres-init/init.sql`. Three tables mirror the Kafka topics:
+
+| Table          | Primary Key      | Purpose                                |
+|----------------|------------------|----------------------------------------|
+| `transactions` | `event_id`       | Raw transaction events                 |
+| `risk_scores`  | `risk_event_id`  | Risk evaluation results                |
+| `alerts`       | `alert_id`       | Alert events with severity and action  |
+
+All tables include a `raw_event` JSONB column storing the full original Kafka event, and indexes on `card_id` for efficient lookups. Inserts are idempotent via `ON CONFLICT DO NOTHING`.
+
+---
+
 ## Fraud Simulation
 
 The transaction streamer injects fraud-like patterns probabilistically. Patterns are independent of each other, so combinations happen naturally.
@@ -235,7 +297,7 @@ The alert service maps each risk label to a severity and action:
 
 ## Prerequisites
 
-- **Docker** (for Kafka and Zookeeper)
+- **Docker** (for Kafka, Zookeeper, and PostgreSQL)
 - **Python 3.9+**
 
 ---
@@ -252,19 +314,27 @@ source venv/bin/activate
 ### 2. Install Dependencies
 
 ```bash
-pip install confluent-kafka streamlit
+pip install -r requirements.txt
 ```
 
-### 3. Start Kafka
+### 3. Configure Environment Variables
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` if you need to change any defaults (Kafka broker, PostgreSQL credentials, etc.). The default values work out-of-the-box for local development.
+
+### 4. Start Infrastructure (Kafka + PostgreSQL)
 
 ```bash
 cd kafka-local
-docker compose up -d
+docker compose --env-file ../.env up -d
 ```
 
-Wait a few seconds for the broker to be ready.
+Wait a few seconds for the broker and database to be ready. PostgreSQL tables are created automatically on first startup.
 
-### 4. Create Topics
+### 5. Create Topics
 
 ```bash
 bash kafka/create-topics.sh
@@ -278,7 +348,7 @@ docker exec kafka kafka-topics \
   --list
 ```
 
-### 5. Start the Transaction Streamer (Terminal 1)
+### 6. Start the Transaction Streamer (Terminal 1)
 
 ```bash
 venv/bin/python producer/transaction_streamer.py
@@ -286,7 +356,7 @@ venv/bin/python producer/transaction_streamer.py
 
 You will see one transaction logged every 2 seconds.
 
-### 6. Start the Risk Score Processor (Terminal 2)
+### 7. Start the Risk Score Processor (Terminal 2)
 
 ```bash
 venv/bin/python processor/risk_score_processor.py
@@ -297,7 +367,7 @@ You will see color-coded risk evaluations printed for each incoming transaction:
 - Yellow `[MEDIUM]` -- one signal triggered
 - Red `[HIGH  ]` -- multiple signals triggered
 
-### 7. Start the Alert Service (Terminal 3)
+### 8. Start the Alert Service (Terminal 3)
 
 ```bash
 venv/bin/python consumer/alert_service.py
@@ -308,7 +378,19 @@ You will see color-coded alerts:
 - Yellow `[WARNING ]` -- REVIEW_TRANSACTION
 - Red `[CRITICAL]` -- BLOCK_CARD
 
-### 8. Start the Streamlit UI (Terminal 4)
+### 9. Start the Persistence Service (Terminal 4)
+
+```bash
+venv/bin/python consumer/persistence_service.py
+```
+
+You will see structured log entries for each event persisted to PostgreSQL:
+
+```
+Persisted  topic=transactions   partition=0  offset=42
+```
+
+### 10. Start the Streamlit UI (Terminal 5)
 
 ```bash
 streamlit run frontend/app.py
@@ -382,6 +464,13 @@ docker exec kafka kafka-consumer-groups \
   --describe
 ```
 
+```bash
+docker exec kafka kafka-consumer-groups \
+  --bootstrap-server localhost:9092 \
+  --group persistence-service-group \
+  --describe
+```
+
 ### Delete and recreate topics (reset)
 
 ```bash
@@ -391,15 +480,70 @@ bash kafka/create-topics.sh
 
 ---
 
+## Querying PostgreSQL
+
+Connect to the database:
+
+```bash
+docker exec -it postgres psql -U fraud_user -d fraud_detection_db
+```
+
+### Count events per table
+
+```sql
+SELECT 'transactions' AS table_name, COUNT(*) FROM transactions
+UNION ALL
+SELECT 'risk_scores', COUNT(*) FROM risk_scores
+UNION ALL
+SELECT 'alerts', COUNT(*) FROM alerts;
+```
+
+### Recent high-risk alerts
+
+```sql
+SELECT alert_id, card_id, severity, action, created_at
+FROM alerts
+WHERE severity = 'CRITICAL'
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+### Transaction with its risk score and alert
+
+```sql
+SELECT
+    t.event_id,
+    t.card_id,
+    t.amount,
+    t.country,
+    r.risk_score,
+    r.risk_label,
+    a.severity,
+    a.action
+FROM transactions t
+JOIN risk_scores r ON r.transaction_event_id = t.event_id
+JOIN alerts a ON a.transaction_event_id = t.event_id
+ORDER BY t.transaction_timestamp DESC
+LIMIT 10;
+```
+
+---
+
 ## Stopping
 
-1. Press `Ctrl+C` in the streamer, processor, and alert service terminals.
+1. Press `Ctrl+C` in the streamer, processor, alert service, and persistence service terminals.
 2. Stop the Streamlit UI with `Ctrl+C`.
-3. Shut down Kafka:
+3. Shut down infrastructure:
 
 ```bash
 cd kafka-local
 docker compose down
+```
+
+To also remove the PostgreSQL data volume (full reset):
+
+```bash
+docker compose down -v
 ```
 
 ---
@@ -407,6 +551,7 @@ docker compose down
 ## What's Completed
 
 - [x] Local Kafka infrastructure (Zookeeper + Broker via Docker)
+- [x] PostgreSQL database with automated schema initialization
 - [x] Topic creation and management scripts (`transactions`, `risk_scores`, `alerts`)
 - [x] Transaction streamer (producer) with realistic synthetic data
 - [x] Fraud pattern injection (high-value, foreign, new device, ATM anomaly)
@@ -414,5 +559,7 @@ docker compose down
 - [x] Immutable risk event schema emitted to `risk_scores` topic
 - [x] Alert service (consumer/producer) with severity/action mapping
 - [x] Immutable alert event schema emitted to `alerts` topic
+- [x] Persistence service — consumes all topics and writes to PostgreSQL
 - [x] Streamlit UI for manual transaction submission with real-time fraud analysis
 - [x] Color-coded console output across all services
+- [x] Environment variable externalization via `.env` and `python-dotenv`

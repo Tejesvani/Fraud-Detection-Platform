@@ -1,9 +1,16 @@
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Consumer, Producer, KafkaError
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 # ── Risk label enum ────────────────────────────────────────────────────────────
@@ -111,10 +118,10 @@ def print_risk_event(event: dict, txn: dict):
 
 # ── Kafka config ───────────────────────────────────────────────────────────────
 
-KAFKA_BROKER = "localhost:9092"
-INPUT_TOPIC = "transactions"
-OUTPUT_TOPIC = "risk_scores"
-GROUP_ID = "risk-score-processor-group"
+KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+INPUT_TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
+OUTPUT_TOPIC = os.environ.get("KAFKA_TOPIC_RISK_SCORES", "risk_scores")
+GROUP_ID = os.environ.get("KAFKA_GROUP_RISK_PROCESSOR", "risk-score-processor-group")
 
 
 def delivery_callback(err, msg):

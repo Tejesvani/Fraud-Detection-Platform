@@ -1,9 +1,16 @@
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Consumer, Producer, KafkaError
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────────
@@ -75,10 +82,10 @@ def print_alert(alert: dict):
 
 # ── Kafka config ───────────────────────────────────────────────────────────────
 
-KAFKA_BROKER = "localhost:9092"
-INPUT_TOPIC = "risk_scores"
-OUTPUT_TOPIC = "alerts"
-GROUP_ID = "alert-service-group"
+KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+INPUT_TOPIC = os.environ.get("KAFKA_TOPIC_RISK_SCORES", "risk_scores")
+OUTPUT_TOPIC = os.environ.get("KAFKA_TOPIC_ALERTS", "alerts")
+GROUP_ID = os.environ.get("KAFKA_GROUP_ALERT_SERVICE", "alert-service-group")
 
 
 def delivery_callback(err, msg):
