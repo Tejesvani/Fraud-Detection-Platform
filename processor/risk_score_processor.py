@@ -1,9 +1,20 @@
-import json
+import os
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Consumer, Producer, KafkaError
+from confluent_kafka.serialization import SerializationContext, MessageField, StringSerializer
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from schemas import get_avro_serializer, get_avro_deserializer
 
 
 # ── Risk label enum ────────────────────────────────────────────────────────────
@@ -76,8 +87,7 @@ def score_transaction(txn: dict) -> dict:
         "card_id": txn["card_id"],
         "risk_score": round(score, 2),
         "risk_label": label.value,
-        "reasons": reasons,
-        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "evaluated_at": int(datetime.now(timezone.utc).timestamp() * 1000),
     }
 
 
@@ -104,17 +114,15 @@ def print_risk_event(event: dict, txn: dict):
         f"country={txn['country']}  "
         f"device={txn['device_id']}"
     )
-    if event["reasons"]:
-        print(f"        signals: {', '.join(event['reasons'])}")
     print()
 
 
 # ── Kafka config ───────────────────────────────────────────────────────────────
 
-KAFKA_BROKER = "localhost:9092"
-INPUT_TOPIC = "transactions"
-OUTPUT_TOPIC = "risk_scores"
-GROUP_ID = "risk-score-processor-group"
+KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+INPUT_TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
+OUTPUT_TOPIC = os.environ.get("KAFKA_TOPIC_RISK_SCORES", "risk_scores")
+GROUP_ID = os.environ.get("KAFKA_GROUP_RISK_PROCESSOR", "risk-score-processor-group")
 
 
 def delivery_callback(err, msg):
@@ -123,6 +131,10 @@ def delivery_callback(err, msg):
 
 
 def run():
+    txn_deserializer = get_avro_deserializer("transaction")
+    risk_serializer = get_avro_serializer("risk_score")
+    string_serializer = StringSerializer("utf_8")
+
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": GROUP_ID,
@@ -132,13 +144,13 @@ def run():
 
     producer = Producer({
         "bootstrap.servers": KAFKA_BROKER,
-        "client.id": "risk-score-processor",    # name for the producer client
-        "queue.buffering.max.messages": 10000,  # safety cap on producer queue
+        "client.id": "risk-score-processor",
+        "queue.buffering.max.messages": 10000,
     })
 
     consumer.subscribe([INPUT_TOPIC])
 
-    print(f"Risk Score Processor started")
+    print(f"Risk Score Processor started (Avro)")
     print(f"  consuming from : {INPUT_TOPIC}")
     print(f"  producing to   : {OUTPUT_TOPIC}")
     print("Press Ctrl+C to stop\n")
@@ -156,14 +168,13 @@ def run():
                 print(f"[ERROR] {msg.error()}")
                 continue
 
-            txn = json.loads(msg.value().decode("utf-8"))
+            txn = txn_deserializer(msg.value(), SerializationContext(INPUT_TOPIC, MessageField.VALUE))
             risk_event = score_transaction(txn)
 
-            # Emit risk event to risk_scores topic, keyed by card_id
             producer.produce(
                 topic=OUTPUT_TOPIC,
-                key=risk_event["card_id"],
-                value=json.dumps(risk_event),
+                key=string_serializer(risk_event["card_id"]),
+                value=risk_serializer(risk_event, SerializationContext(OUTPUT_TOPIC, MessageField.VALUE)),
                 callback=delivery_callback,
             )
             producer.poll(0)

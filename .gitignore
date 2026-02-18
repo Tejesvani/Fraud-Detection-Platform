@@ -21,3 +21,6 @@ Thumbs.db
 
 # Environment variables
 .env
+
+# JDBC driver jars
+**/connect-image/*.jar

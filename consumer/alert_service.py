@@ -1,9 +1,20 @@
-import json
+import os
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Consumer, Producer, KafkaError
+from confluent_kafka.serialization import SerializationContext, MessageField, StringSerializer
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from schemas import get_avro_serializer, get_avro_deserializer
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────────
@@ -40,11 +51,9 @@ def build_alert(risk_event: dict) -> dict:
         "risk_event_id": risk_event["risk_event_id"],
         "transaction_event_id": risk_event["transaction_event_id"],
         "card_id": risk_event["card_id"],
-        "risk_score": risk_event["risk_score"],
         "severity": severity.value,
         "action": action.value,
-        "reasons": risk_event["reasons"],
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": int(datetime.now(timezone.utc).timestamp() * 1000),
     }
 
 
@@ -68,17 +77,15 @@ def print_alert(alert: dict):
         f"card={alert['card_id']:<7} "
         f"risk_event={alert['risk_event_id'][:8]}..."
     )
-    if alert["reasons"]:
-        print(f"          reasons: {', '.join(alert['reasons'])}")
     print()
 
 
 # ── Kafka config ───────────────────────────────────────────────────────────────
 
-KAFKA_BROKER = "localhost:9092"
-INPUT_TOPIC = "risk_scores"
-OUTPUT_TOPIC = "alerts"
-GROUP_ID = "alert-service-group"
+KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+INPUT_TOPIC = os.environ.get("KAFKA_TOPIC_RISK_SCORES", "risk_scores")
+OUTPUT_TOPIC = os.environ.get("KAFKA_TOPIC_ALERTS", "alerts")
+GROUP_ID = os.environ.get("KAFKA_GROUP_ALERT_SERVICE", "alert-service-group")
 
 
 def delivery_callback(err, msg):
@@ -87,6 +94,10 @@ def delivery_callback(err, msg):
 
 
 def run():
+    risk_deserializer = get_avro_deserializer("risk_score")
+    alert_serializer = get_avro_serializer("alert")
+    string_serializer = StringSerializer("utf_8")
+
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": GROUP_ID,
@@ -102,7 +113,7 @@ def run():
 
     consumer.subscribe([INPUT_TOPIC])
 
-    print(f"Alert Service started")
+    print(f"Alert Service started (Avro)")
     print(f"  consuming from : {INPUT_TOPIC}")
     print(f"  producing to   : {OUTPUT_TOPIC}")
     print("Press Ctrl+C to stop\n")
@@ -120,7 +131,7 @@ def run():
                 print(f"[ERROR] {msg.error()}")
                 continue
 
-            risk_event = json.loads(msg.value().decode("utf-8"))
+            risk_event = risk_deserializer(msg.value(), SerializationContext(INPUT_TOPIC, MessageField.VALUE))
 
             if risk_event["risk_label"] not in ALERT_POLICY:
                 consumer.commit(msg)
@@ -130,8 +141,8 @@ def run():
 
             producer.produce(
                 topic=OUTPUT_TOPIC,
-                key=alert["card_id"],
-                value=json.dumps(alert),
+                key=string_serializer(alert["card_id"]),
+                value=alert_serializer(alert, SerializationContext(OUTPUT_TOPIC, MessageField.VALUE)),
                 callback=delivery_callback,
             )
             producer.poll(0)

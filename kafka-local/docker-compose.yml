@@ -3,7 +3,7 @@ version: "3.8"
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
-    container_name: zookeeper
+    container_name: zookeeper-prod
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -12,7 +12,7 @@ services:
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
-    container_name: kafka
+    container_name: kafka-prod
     depends_on:
       - zookeeper
     ports:
@@ -24,9 +24,11 @@ services:
       # Zookeeper connection
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
 
-      # Listeners (important for localhost access)
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # Dual listeners: INTERNAL for Docker containers, EXTERNAL for host access
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
 
       # Single-node friendly configs
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -36,19 +38,66 @@ services:
       # Disable auto topic creation (best practice)
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
 
-  postgres:
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: schema-registry-prod
+    depends_on:
+      - kafka
+    ports:
+      - "${SCHEMA_REGISTRY_PORT:-8081}:8081"
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+  postgres-prod:
     image: postgres:16
-    container_name: postgres
+    container_name: postgres-prod
     restart: always
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PROD_PORT:-5433}:5432"
     environment:
-      POSTGRES_USER: fraud_user
-      POSTGRES_PASSWORD: fraud_password
-      POSTGRES_DB: fraud_detection_db
+      POSTGRES_USER: ${POSTGRES_PROD_USER:-fraud_prod_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PROD_PASSWORD:-fraud_prod_password}
+      POSTGRES_DB: ${POSTGRES_PROD_DB:-fraud_detection_prod}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./postgres-init:/docker-entrypoint-initdb.d
+      - postgres_prod_data:/var/lib/postgresql/data
+      - ./postgres-init-prod:/docker-entrypoint-initdb.d
+
+  connect-prod:
+    build: ./connect-image
+    image: fraud-connect-prod
+    container_name: connect-prod
+    depends_on:
+      - kafka
+      - postgres-prod
+      - schema-registry
+    ports:
+      - "${CONNECT_REST_PORT:-8084}:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_GROUP_ID: connect-prod-cluster
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-prod-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-prod-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-prod-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect-prod
+      CONNECT_REST_PORT: 8083
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+      # Enable env var resolution in connector configs via ${env:VAR_NAME}
+      CONNECT_CONFIG_PROVIDERS: "env"
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: "org.apache.kafka.common.config.provider.EnvVarConfigProvider"
+      # Pass DB credentials so connectors can reference them
+      POSTGRES_PROD_USER: ${POSTGRES_PROD_USER:-fraud_prod_user}
+      POSTGRES_PROD_PASSWORD: ${POSTGRES_PROD_PASSWORD:-fraud_prod_password}
+      POSTGRES_PROD_DB: ${POSTGRES_PROD_DB:-fraud_detection_prod}
+    volumes:
+      - ./connect-configs:/etc/kafka-connect/configs
 
 volumes:
-  postgres_data:
+  postgres_prod_data:

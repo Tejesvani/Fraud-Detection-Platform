@@ -1,0 +1,13 @@
+{
+  "type": "record",
+  "name": "RiskScore",
+  "namespace": "fraud.platform",
+  "fields": [
+    {"name": "risk_event_id", "type": "string"},
+    {"name": "transaction_event_id", "type": "string"},
+    {"name": "card_id", "type": "string"},
+    {"name": "risk_score", "type": "double"},
+    {"name": "risk_label", "type": "string"},
+    {"name": "evaluated_at", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+  ]
+}

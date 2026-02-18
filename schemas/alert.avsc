@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "Alert",
+  "namespace": "fraud.platform",
+  "fields": [
+    {"name": "alert_id", "type": "string"},
+    {"name": "risk_event_id", "type": "string"},
+    {"name": "transaction_event_id", "type": "string"},
+    {"name": "card_id", "type": "string"},
+    {"name": "severity", "type": "string"},
+    {"name": "action", "type": "string"},
+    {"name": "created_at", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+  ]
+}

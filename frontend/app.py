@@ -1,4 +1,4 @@
-import json
+import os
 import uuid
 import time
 from datetime import datetime, timezone
@@ -6,13 +6,24 @@ from typing import Optional
 
 import streamlit as st
 from confluent_kafka import Producer, Consumer, TopicPartition, KafkaError
+from confluent_kafka.serialization import SerializationContext, MessageField, StringSerializer
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from schemas import get_avro_serializer, get_avro_deserializer
 
 
 # ── Kafka config ───────────────────────────────────────────────────────────────
 
-KAFKA_BROKER = "localhost:9092"
-TRANSACTIONS_TOPIC = "transactions"
-ALERTS_TOPIC = "alerts"
+KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+TRANSACTIONS_TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
+ALERTS_TOPIC = os.environ.get("KAFKA_TOPIC_ALERTS", "alerts")
 ALERT_POLL_TIMEOUT_S = 30
 
 # ── Reference data (mirrors producer) ─────────────────────────────────────────
@@ -71,30 +82,42 @@ def get_producer():
     return st.session_state.producer
 
 
+def get_txn_serializer():
+    """Return a cached Avro serializer for transactions."""
+    if "txn_serializer" not in st.session_state:
+        st.session_state.txn_serializer = get_avro_serializer("transaction")
+    return st.session_state.txn_serializer
+
+
+def get_alert_deserializer():
+    """Return a cached Avro deserializer for alerts."""
+    if "alert_deserializer" not in st.session_state:
+        st.session_state.alert_deserializer = get_avro_deserializer("alert")
+    return st.session_state.alert_deserializer
+
+
 def produce_transaction(txn: dict):
-    """Produce a transaction event to Kafka."""
+    """Produce an Avro-serialized transaction event to Kafka."""
     producer = get_producer()
+    serializer = get_txn_serializer()
+    string_serializer = StringSerializer("utf_8")
+
     producer.produce(
         topic=TRANSACTIONS_TOPIC,
-        key=txn["card_id"],
-        value=json.dumps(txn),
+        key=string_serializer(txn["card_id"]),
+        value=serializer(txn, SerializationContext(TRANSACTIONS_TOPIC, MessageField.VALUE)),
     )
     producer.flush(timeout=5)
 
 
 def create_alert_consumer() -> Consumer:
-    """Create a consumer assigned to all alert partitions, seeked to the end.
-
-    Uses assign() instead of subscribe() to skip the consumer group protocol
-    (join/rebalance), which can take several seconds and cause a race condition.
-    """
+    """Create a consumer assigned to all alert partitions, seeked to the end."""
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": f"ui-alert-listener-{uuid.uuid4()}",
         "auto.offset.reset": "latest",
     })
 
-    # Get partition metadata and assign directly
     metadata = consumer.list_topics(ALERTS_TOPIC, timeout=5)
     partitions = [
         TopicPartition(ALERTS_TOPIC, p)
@@ -102,10 +125,8 @@ def create_alert_consumer() -> Consumer:
     ]
     consumer.assign(partitions)
 
-    # poll() once to finalize partition assignment before seeking
     consumer.poll(timeout=1.0)
 
-    # Seek each partition to the end so we only read new messages
     for tp in partitions:
         _, high = consumer.get_watermark_offsets(tp, timeout=5)
         consumer.seek(TopicPartition(ALERTS_TOPIC, tp.partition, high))
@@ -116,6 +137,7 @@ def create_alert_consumer() -> Consumer:
 def poll_for_alert(consumer: Consumer, event_id: str, timeout_s: int = ALERT_POLL_TIMEOUT_S) -> Optional[dict]:
     """Poll the pre-assigned consumer until we find the matching alert or timeout."""
     deadline = time.time() + timeout_s
+    deserializer = get_alert_deserializer()
 
     try:
         while time.time() < deadline:
@@ -128,7 +150,7 @@ def poll_for_alert(consumer: Consumer, event_id: str, timeout_s: int = ALERT_POL
                     continue
                 continue
 
-            alert = json.loads(msg.value().decode("utf-8"))
+            alert = deserializer(msg.value(), SerializationContext(ALERTS_TOPIC, MessageField.VALUE))
 
             if alert.get("transaction_event_id") == event_id:
                 return alert
@@ -175,11 +197,11 @@ if st.button("Submit Transaction", type="primary", use_container_width=True):
 
     txn = {
         "event_id": event_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
         "card_id": card_id,
         "transaction_type": txn_type,
         "merchant_category": merchant_category,
-        "amount": amount,
+        "amount": float(amount),
         "country": country,
         "device_id": device_id,
         "source": "ui",
@@ -226,13 +248,6 @@ if st.button("Submit Transaction", type="primary", use_container_width=True):
 
         with result_col2:
             st.metric("Card", alert["card_id"])
-            st.metric("Risk Score", alert.get("risk_score", "N/A"))
-
-        # Reasons
-        if alert["reasons"]:
-            st.markdown("**Triggered Signals:**")
-            for reason in alert["reasons"]:
-                st.markdown(f"- `{reason}`")
 
         # Raw JSON
         with st.expander("Raw Alert Event"):

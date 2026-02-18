@@ -1,4 +1,4 @@
-import json
+import os
 import random
 import time
 import uuid
@@ -6,6 +6,17 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Producer
+from confluent_kafka.serialization import SerializationContext, MessageField, StringSerializer
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from schemas import get_avro_serializer
 
 
 # ── Transaction type enum ──────────────────────────────────────────────────────
@@ -120,13 +131,14 @@ def generate_transaction() -> dict:
 
     txn = {
         "event_id": str(uuid.uuid4()),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
         "card_id": card_id,
         "transaction_type": txn_type.value,
         "merchant_category": merchant_category,
-        "amount": amount,
+        "amount": float(amount),
         "country": HOME_COUNTRY,
         "device_id": CARD_HOME_DEVICES[card_id],
+        "source": "streamer",
     }
 
     # Independently apply fraud patterns — combinations happen naturally
@@ -140,8 +152,8 @@ def generate_transaction() -> dict:
 
 # ── Kafka producer ─────────────────────────────────────────────────────────────
 
-KAFKA_BROKER = "localhost:9092"
-TOPIC = "transactions"
+KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
 
 
 def delivery_callback(err, msg):
@@ -152,13 +164,16 @@ def delivery_callback(err, msg):
 
 
 def run():
+    avro_serializer = get_avro_serializer("transaction")
+    string_serializer = StringSerializer("utf_8")
+
     producer = Producer({
         "bootstrap.servers": KAFKA_BROKER,
         "client.id": "transaction-streamer",
-        "queue.buffering.max.messages": 10000,  # safety cap
+        "queue.buffering.max.messages": 10000,
     })
 
-    print(f"Transaction Streamer started — producing to '{TOPIC}' every 2s")
+    print(f"Transaction Streamer started — producing Avro to '{TOPIC}' every 2s")
     print("Press Ctrl+C to stop\n")
 
     try:
@@ -167,8 +182,8 @@ def run():
 
             producer.produce(
                 topic=TOPIC,
-                key=txn["card_id"],
-                value=json.dumps(txn),
+                key=string_serializer(txn["card_id"]),
+                value=avro_serializer(txn, SerializationContext(TOPIC, MessageField.VALUE)),
                 callback=delivery_callback,
             )
             producer.poll(0)

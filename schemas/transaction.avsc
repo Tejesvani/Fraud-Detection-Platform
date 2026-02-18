@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "Transaction",
+  "namespace": "fraud.platform",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "card_id", "type": "string"},
+    {"name": "transaction_type", "type": "string"},
+    {"name": "merchant_category", "type": "string"},
+    {"name": "amount", "type": "double"},
+    {"name": "country", "type": "string"},
+    {"name": "device_id", "type": "string"},
+    {"name": "timestamp", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "source", "type": "string"}
+  ]
+}
