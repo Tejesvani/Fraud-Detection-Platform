@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schema-registry
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    app: schema-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: schema-registry
+  template:
+    metadata:
+      labels:
+        app: schema-registry
+        app.kubernetes.io/part-of: fraud-detection-platform
+    spec:
+      containers:
+        - name: schema-registry
+          image: confluentinc/cp-schema-registry:7.6.0
+          ports:
+            - containerPort: 8081
+          env:
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: "fraud-detection-cluster-kafka-bootstrap:9092"
+            - name: SCHEMA_REGISTRY_HOST_NAME
+              value: schema-registry
+            - name: SCHEMA_REGISTRY_LISTENERS
+              value: "http://0.0.0.0:8081"
+          readinessProbe:
+            httpGet:
+              path: /subjects
+              port: 8081
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /subjects
+              port: 8081
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

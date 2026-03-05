@@ -1,0 +1,17 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: streamlit-ui
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    app: streamlit-ui
+spec:
+  to:
+    kind: Service
+    name: streamlit-ui
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,30 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc librdkafka-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY schemas/ schemas/
+COPY frontend/ frontend/
+
+RUN mkdir -p .streamlit \
+    && printf '[server]\nheadless = true\nport = 8501\nenableCORS = false\nenableXsrfProtection = false\naddress = "0.0.0.0"\n' \
+       > .streamlit/config.toml
+
+RUN adduser --uid 1001 --disabled-password --gecos '' appuser \
+    && chown -R appuser:root /app \
+    && chmod -R g=u /app
+
+USER 1001
+
+EXPOSE 8501
+
+CMD ["python", "-u", "-m", "streamlit", "run", "frontend/app.py"]

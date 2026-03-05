@@ -532,6 +532,154 @@ docker compose down -v
 
 ---
 
+## Deploying to OpenShift
+
+All OpenShift manifests live in `openshift/` and Dockerfiles in `dockerfiles/`.
+
+### Prerequisites
+
+- **`oc` CLI** installed and logged in to your OpenShift cluster (`oc login ...`)
+- **Strimzi Operator** installed cluster-wide or in the `fraud-detection-prod` namespace
+- **Quay.io account** with a repository for each image
+- The `fraud-detection-prod` namespace must exist before creating the pull secret
+
+### 1. Create the Quay.io Registry Secret
+
+```bash
+oc create secret docker-registry quay-registry-secret \
+  --docker-server=quay.io \
+  --docker-username=YOUR_QUAY_USERNAME \
+  --docker-password=YOUR_QUAY_PASSWORD \
+  --docker-email=YOUR_EMAIL \
+  -n fraud-detection-prod
+```
+
+### 2. Build and Push the 4 Docker Images
+
+Run from the project root. Build context is `.` so each Dockerfile can access `requirements.txt` and `schemas/`.
+
+```bash
+# Transaction Streamer
+docker build -f dockerfiles/Dockerfile.streamer \
+  -t quay.io/YOUR_QUAY_USERNAME/fraud-streamer:latest .
+docker push quay.io/YOUR_QUAY_USERNAME/fraud-streamer:latest
+
+# Risk Score Processor
+docker build -f dockerfiles/Dockerfile.processor \
+  -t quay.io/YOUR_QUAY_USERNAME/fraud-processor:latest .
+docker push quay.io/YOUR_QUAY_USERNAME/fraud-processor:latest
+
+# Alert Service
+docker build -f dockerfiles/Dockerfile.alert-service \
+  -t quay.io/YOUR_QUAY_USERNAME/fraud-alert-service:latest .
+docker push quay.io/YOUR_QUAY_USERNAME/fraud-alert-service:latest
+
+# Streamlit UI
+docker build -f dockerfiles/Dockerfile.streamlit \
+  -t quay.io/YOUR_QUAY_USERNAME/fraud-streamlit-ui:latest .
+docker push quay.io/YOUR_QUAY_USERNAME/fraud-streamlit-ui:latest
+```
+
+### 3. Update Image References
+
+Replace `YOUR_QUAY_USERNAME` in these files with your actual Quay.io username:
+
+| File | Image placeholder |
+|------|-------------------|
+| `openshift/11-kafka-connect.yaml` | `quay.io/YOUR_QUAY_USERNAME/fraud-kafka-connect:latest` |
+| `openshift/13-transaction-streamer.yaml` | `quay.io/YOUR_QUAY_USERNAME/fraud-streamer:latest` |
+| `openshift/14-risk-score-processor.yaml` | `quay.io/YOUR_QUAY_USERNAME/fraud-processor:latest` |
+| `openshift/15-alert-service.yaml` | `quay.io/YOUR_QUAY_USERNAME/fraud-alert-service:latest` |
+| `openshift/16-streamlit-ui.yaml` | `quay.io/YOUR_QUAY_USERNAME/fraud-streamlit-ui:latest` |
+
+### 4. Deploy
+
+```bash
+cd openshift
+bash deploy.sh
+```
+
+The script applies all manifests in the correct order and waits for each critical component before proceeding. Estimated total time: **10–15 minutes** (dominated by the Strimzi Kafka Connect image build).
+
+### 5. Access the UI
+
+```bash
+oc get route streamlit-ui -n fraud-detection-prod
+```
+
+Open the `HOST` value in your browser (HTTPS via edge TLS termination).
+
+---
+
+### Local vs OpenShift — Key Differences
+
+| Aspect | Local (`kafka-local/docker-compose.yml`) | OpenShift (`openshift/`) |
+|--------|------------------------------------------|--------------------------|
+| Kafka | `confluentinc/cp-kafka:7.5.0` container | Strimzi `Kafka` CRD, 3 replicas |
+| Kafka bootstrap | `localhost:9092` | `fraud-detection-cluster-kafka-bootstrap:9092` |
+| Schema Registry | `confluentinc/cp-schema-registry:7.5.0` | `confluentinc/cp-schema-registry:7.6.0` |
+| Schema Registry URL | `http://localhost:8081` | `http://schema-registry:8081` |
+| Kafka Connect | Docker container with pre-built image | Strimzi `KafkaConnect` CRD with in-cluster image build |
+| Connector registration | `register-connectors-prod.sh` (REST API) | Strimzi `KafkaConnector` CRDs |
+| PostgreSQL host | `postgres-prod` (Docker service name) | `postgres-prod` (Kubernetes service name) |
+| PostgreSQL port | `5433` (host-mapped) | `5432` (internal cluster port) |
+| Persistence for Python apps | Not needed — Kafka Connect handles it | Same — Kafka Connect handles it |
+| TLS | None | Edge TLS on Streamlit Route |
+| Container user | Root | Non-root UID 1001 (OpenShift requirement) |
+
+---
+
+### Verification Commands
+
+```bash
+# All pods running
+oc get pods -n fraud-detection-prod
+
+# Kafka cluster healthy
+oc get kafka fraud-detection-cluster -n fraud-detection-prod
+
+# Topics provisioned by Strimzi
+oc get kafkatopics -n fraud-detection-prod
+
+# Kafka Connect ready
+oc get kafkaconnect fraud-detection-connect -n fraud-detection-prod
+
+# Connector status
+oc get kafkaconnectors -n fraud-detection-prod
+
+# Schema Registry subjects (after first messages)
+SCHEMA_REGISTRY_POD=$(oc get pod -l app=schema-registry -n fraud-detection-prod -o jsonpath='{.items[0].metadata.name}')
+oc exec -n fraud-detection-prod "$SCHEMA_REGISTRY_POD" -- \
+  curl -s http://localhost:8081/subjects
+
+# PostgreSQL row counts
+POSTGRES_POD=$(oc get pod -l app=postgres-prod -n fraud-detection-prod -o jsonpath='{.items[0].metadata.name}')
+oc exec -n fraud-detection-prod "$POSTGRES_POD" -- \
+  psql -U fraud_prod_user -d fraud_detection_prod \
+  -c "SELECT 'transactions_prod' AS t, COUNT(*) FROM transactions_prod
+      UNION ALL SELECT 'risk_scores_prod', COUNT(*) FROM risk_scores_prod
+      UNION ALL SELECT 'alerts_prod', COUNT(*) FROM alerts_prod;"
+
+# Streamlit route URL
+oc get route streamlit-ui -n fraud-detection-prod -o jsonpath='{.spec.host}'
+```
+
+---
+
+### Python Services and Environment Variables
+
+All Python services already read configuration exclusively from environment variables — no source changes are required for OpenShift deployment. The `app-config` ConfigMap (`02-app-configmap.yaml`) injects the correct OpenShift-internal service names:
+
+| Service | Env var | Local default | OpenShift value (from ConfigMap) |
+|---------|---------|---------------|----------------------------------|
+| All | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | `fraud-detection-cluster-kafka-bootstrap:9092` |
+| All | `SCHEMA_REGISTRY_URL` | `http://localhost:8081` | `http://schema-registry:8081` |
+| Streamer, Processor, Streamlit | `KAFKA_TOPIC_TRANSACTIONS` | `transactions` | `transactions` |
+| Processor | `KAFKA_TOPIC_RISK_SCORES` | `risk_scores` | `risk_scores` |
+| Alert Service, Streamlit | `KAFKA_TOPIC_ALERTS` | `alerts` | `alerts` |
+
+---
+
 ## What's Completed
 
 - [x] Local Kafka infrastructure (Zookeeper + Broker + Schema Registry + PostgreSQL + Connect via Docker)

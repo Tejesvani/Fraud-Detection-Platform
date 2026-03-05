@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit-ui
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    app: streamlit-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streamlit-ui
+  template:
+    metadata:
+      labels:
+        app: streamlit-ui
+        app.kubernetes.io/part-of: fraud-detection-platform
+    spec:
+      imagePullSecrets:
+        - name: quay-registry-secret
+      containers:
+        - name: streamlit-ui
+          image: quay.io/tejesvani/fraud-streamlit-ui:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8501
+          envFrom:
+            - configMapRef:
+                name: app-config
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamlit-ui
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    app: streamlit-ui
+spec:
+  selector:
+    app: streamlit-ui
+  ports:
+    - name: http
+      port: 8501
+      targetPort: 8501
+  type: ClusterIP

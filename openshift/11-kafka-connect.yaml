@@ -1,0 +1,66 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnect
+metadata:
+  name: fraud-detection-connect
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 3.7.0
+  replicas: 1
+  bootstrapServers: fraud-detection-cluster-kafka-bootstrap:9092
+  config:
+    group.id: connect-prod-cluster
+    offset.storage.topic: _connect-prod-offsets
+    config.storage.topic: _connect-prod-configs
+    status.storage.topic: _connect-prod-status
+    config.storage.replication.factor: 3
+    offset.storage.replication.factor: 3
+    status.storage.replication.factor: 3
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: io.confluent.connect.avro.AvroConverter
+    value.converter.schema.registry.url: http://schema-registry:8081
+  build:
+    output:
+      type: docker
+      image: quay.io/tejesvani/fraud-kafka-connect:latest
+      pushSecret: quay-registry-secret
+    plugins:
+      - name: kafka-connect-jdbc
+        artifacts:
+          - type: zip
+            url: https://d2p6pa21dvn84.cloudfront.net/api/plugins/confluentinc/kafka-connect-jdbc/versions/10.7.6/confluentinc-kafka-connect-jdbc-10.7.6.zip
+      - name: kafka-connect-avro-converter
+        artifacts:
+          - type: zip
+            url: https://d2p6pa21dvn84.cloudfront.net/api/plugins/confluentinc/kafka-connect-avro-converter/versions/7.6.0/confluentinc-kafka-connect-avro-converter-7.6.0.zip
+      - name: postgresql-jdbc-driver
+        artifacts:
+          - type: jar
+            url: https://jdbc.postgresql.org/download/postgresql-42.7.1.jar
+  externalConfiguration:
+    env:
+      - name: POSTGRES_PROD_USER
+        valueFrom:
+          secretKeyRef:
+            name: postgres-credentials
+            key: POSTGRES_USER
+      - name: POSTGRES_PROD_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: postgres-credentials
+            key: POSTGRES_PASSWORD
+      - name: POSTGRES_PROD_DB
+        valueFrom:
+          secretKeyRef:
+            name: postgres-credentials
+            key: POSTGRES_DB
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi

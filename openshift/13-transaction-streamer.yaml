@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-streamer
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    app: transaction-streamer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-streamer
+  template:
+    metadata:
+      labels:
+        app: transaction-streamer
+        app.kubernetes.io/part-of: fraud-detection-platform
+    spec:
+      imagePullSecrets:
+        - name: quay-registry-secret
+      containers:
+        - name: transaction-streamer
+          image: quay.io/tejesvani/fraud-streamer:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: app-config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risk-score-processor
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    app: risk-score-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: risk-score-processor
+  template:
+    metadata:
+      labels:
+        app: risk-score-processor
+        app.kubernetes.io/part-of: fraud-detection-platform
+    spec:
+      imagePullSecrets:
+        - name: quay-registry-secret
+      containers:
+        - name: risk-score-processor
+          image: quay.io/tejesvani/fraud-processor:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: app-config
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

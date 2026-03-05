@@ -1,0 +1,42 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: transactions
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    strimzi.io/cluster: fraud-detection-cluster
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"  # 7 days
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: risk-scores
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    strimzi.io/cluster: fraud-detection-cluster
+spec:
+  topicName: risk_scores
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"  # 7 days
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: alerts
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    strimzi.io/cluster: fraud-detection-cluster
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "604800000"  # 7 days

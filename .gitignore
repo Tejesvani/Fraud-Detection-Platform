@@ -24,3 +24,7 @@ Thumbs.db
 
 # JDBC driver jars
 **/connect-image/*.jar
+
+# Secrets - never commit actual credentials
+openshift/01-postgres-secret.yaml
+*.jar

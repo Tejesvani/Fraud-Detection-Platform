@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-service
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    app: alert-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alert-service
+  template:
+    metadata:
+      labels:
+        app: alert-service
+        app.kubernetes.io/part-of: fraud-detection-platform
+    spec:
+      imagePullSecrets:
+        - name: quay-registry-secret
+      containers:
+        - name: alert-service
+          image: quay.io/tejesvani/fraud-alert-service:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: app-config
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

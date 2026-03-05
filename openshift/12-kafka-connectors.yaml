@@ -1,0 +1,74 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: transactions-prod-sink
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    strimzi.io/cluster: fraud-detection-connect
+spec:
+  class: io.confluent.connect.jdbc.JdbcSinkConnector
+  tasksMax: 1
+  config:
+    topics: transactions
+    connection.url: "jdbc:postgresql://postgres-prod:5432/fraud_detection_prod"
+    connection.user: fraud_prod_user
+    connection.password: fraud_prod_password
+    table.name.format: transactions_prod
+    insert.mode: insert
+    pk.mode: none
+    auto.create: "false"
+    auto.evolve: "false"
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: io.confluent.connect.avro.AvroConverter
+    value.converter.schema.registry.url: http://schema-registry:8081
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: risk-scores-prod-sink
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    strimzi.io/cluster: fraud-detection-connect
+spec:
+  class: io.confluent.connect.jdbc.JdbcSinkConnector
+  tasksMax: 1
+  config:
+    topics: risk_scores
+    connection.url: "jdbc:postgresql://postgres-prod:5432/fraud_detection_prod"
+    connection.user: fraud_prod_user
+    connection.password: fraud_prod_password
+    table.name.format: risk_scores_prod
+    insert.mode: insert
+    pk.mode: none
+    auto.create: "false"
+    auto.evolve: "false"
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: io.confluent.connect.avro.AvroConverter
+    value.converter.schema.registry.url: http://schema-registry:8081
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: alerts-prod-sink
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+    strimzi.io/cluster: fraud-detection-connect
+spec:
+  class: io.confluent.connect.jdbc.JdbcSinkConnector
+  tasksMax: 1
+  config:
+    topics: alerts
+    connection.url: "jdbc:postgresql://postgres-prod:5432/fraud_detection_prod"
+    connection.user: fraud_prod_user
+    connection.password: fraud_prod_password
+    table.name.format: alerts_prod
+    insert.mode: insert
+    pk.mode: none
+    auto.create: "false"
+    auto.evolve: "false"
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: io.confluent.connect.avro.AvroConverter
+    value.converter.schema.registry.url: http://schema-registry:8081

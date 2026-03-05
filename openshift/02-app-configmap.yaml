@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: fraud-detection-prod
+  labels:
+    app.kubernetes.io/part-of: fraud-detection-platform
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "fraud-detection-cluster-kafka-bootstrap:9092"
+  SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+  KAFKA_TOPIC_TRANSACTIONS: "transactions"
+  KAFKA_TOPIC_RISK_SCORES: "risk_scores"
+  KAFKA_TOPIC_ALERTS: "alerts"
+  KAFKA_GROUP_RISK_PROCESSOR: "risk-score-processor-group"
+  KAFKA_GROUP_ALERT_SERVICE: "alert-service-group"
