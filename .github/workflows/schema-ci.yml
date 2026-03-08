@@ -1,0 +1,85 @@
+name: Schema Compatibility Check
+
+on:
+  pull_request:
+    paths:
+      - "schemas/**"
+
+jobs:
+  schema-compatibility:
+    name: Validate schema compatibility
+    runs-on: ubuntu-latest
+
+    services:
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.5.0
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+        ports:
+          - 2181:2181
+
+      kafka:
+        image: confluentinc/cp-kafka:7.5.0
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        ports:
+          - 9092:9092
+
+      schema-registry:
+        image: confluentinc/cp-schema-registry:7.5.0
+        env:
+          SCHEMA_REGISTRY_HOST_NAME: schema-registry
+          SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+          SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: PLAINTEXT
+          SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+          SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: BACKWARD
+        ports:
+          - 8081:8081
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Checkout base branch schemas
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-branch
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Wait for Schema Registry
+        run: |
+          echo "Waiting for Schema Registry to be ready..."
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8081/ > /dev/null 2>&1; then
+              echo "Schema Registry is ready."
+              exit 0
+            fi
+            echo "  attempt $i/30..."
+            sleep 2
+          done
+          echo "ERROR: Schema Registry did not become ready in time."
+          exit 1
+
+      - name: Register base branch schemas (current state)
+        run: |
+          python base-branch/schemas/scripts/check_compatibility.py \
+            --registry-url http://localhost:8081 \
+            --register
+
+      - name: Check PR schemas for compatibility
+        run: |
+          python schemas/scripts/check_compatibility.py \
+            --registry-url http://localhost:8081

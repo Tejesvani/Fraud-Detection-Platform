@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import uuid
 import time
 from datetime import datetime, timezone
@@ -7,6 +8,10 @@ from typing import Optional
 
 import streamlit as st
 from confluent_kafka import Producer, Consumer, TopicPartition, KafkaError
+from confluent_kafka.serialization import SerializationContext, MessageField
+
+# Allow imports from project root (for shared.schema_registry)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 try:
     from dotenv import load_dotenv
@@ -21,6 +26,7 @@ KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 TRANSACTIONS_TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
 ALERTS_TOPIC = os.environ.get("KAFKA_TOPIC_ALERTS", "alerts")
 ALERT_POLL_TIMEOUT_S = 30
+SCHEMA_REGISTRY_ENABLED = os.environ.get("SCHEMA_REGISTRY_ENABLED", "true").lower() == "true"
 
 # ── Reference data (mirrors producer) ─────────────────────────────────────────
 
@@ -78,13 +84,35 @@ def get_producer():
     return st.session_state.producer
 
 
+def get_avro_serializer():
+    """Return a cached Avro serializer, or None if Schema Registry is unavailable."""
+    if "avro_serializer" not in st.session_state:
+        if SCHEMA_REGISTRY_ENABLED:
+            try:
+                from shared.schema_registry import get_avro_serializer as _get
+                st.session_state.avro_serializer = _get("TransactionEvent")
+            except Exception:
+                st.session_state.avro_serializer = None
+        else:
+            st.session_state.avro_serializer = None
+    return st.session_state.avro_serializer
+
+
 def produce_transaction(txn: dict):
-    """Produce a transaction event to Kafka."""
+    """Produce a transaction event to Kafka (Avro if Schema Registry is up, else JSON)."""
     producer = get_producer()
+    serializer = get_avro_serializer()
+
+    if serializer is not None:
+        ctx = SerializationContext(TRANSACTIONS_TOPIC, MessageField.VALUE)
+        value_bytes = serializer(txn, ctx)
+    else:
+        value_bytes = json.dumps(txn).encode("utf-8")
+
     producer.produce(
         topic=TRANSACTIONS_TOPIC,
         key=txn["card_id"],
-        value=json.dumps(txn),
+        value=value_bytes,
     )
     producer.flush(timeout=5)
 
@@ -120,9 +148,24 @@ def create_alert_consumer() -> Consumer:
     return consumer
 
 
+def get_alert_deserializer():
+    """Return a cached Avro deserializer for AlertEvent, or None."""
+    if "alert_deserializer" not in st.session_state:
+        if SCHEMA_REGISTRY_ENABLED:
+            try:
+                from shared.schema_registry import get_avro_deserializer as _get
+                st.session_state.alert_deserializer = _get("AlertEvent")
+            except Exception:
+                st.session_state.alert_deserializer = None
+        else:
+            st.session_state.alert_deserializer = None
+    return st.session_state.alert_deserializer
+
+
 def poll_for_alert(consumer: Consumer, event_id: str, timeout_s: int = ALERT_POLL_TIMEOUT_S) -> Optional[dict]:
     """Poll the pre-assigned consumer until we find the matching alert or timeout."""
     deadline = time.time() + timeout_s
+    deserializer = get_alert_deserializer()
 
     try:
         while time.time() < deadline:
@@ -135,7 +178,11 @@ def poll_for_alert(consumer: Consumer, event_id: str, timeout_s: int = ALERT_POL
                     continue
                 continue
 
-            alert = json.loads(msg.value().decode("utf-8"))
+            if deserializer is not None:
+                ctx = SerializationContext(ALERTS_TOPIC, MessageField.VALUE)
+                alert = deserializer(msg.value(), ctx)
+            else:
+                alert = json.loads(msg.value().decode("utf-8"))
 
             if alert.get("transaction_event_id") == event_id:
                 return alert
@@ -186,10 +233,10 @@ if st.button("Submit Transaction", type="primary", use_container_width=True):
         "card_id": card_id,
         "transaction_type": txn_type,
         "merchant_category": merchant_category,
-        "amount": amount,
+        "amount": float(amount),
         "country": country,
         "device_id": device_id,
-        "source": "ui",
+        "schema_version": 1,
     }
 
     # Set up consumer BEFORE producing so it's ready to catch the alert

@@ -1,0 +1,56 @@
+{
+  "type": "record",
+  "name": "RiskScoreEvent",
+  "namespace": "com.frauddetection.events",
+  "doc": "Risk assessment result produced by the risk score processor.",
+  "fields": [
+    {
+      "name": "risk_event_id",
+      "type": "string",
+      "doc": "Unique identifier for this risk evaluation (UUID v4)."
+    },
+    {
+      "name": "transaction_event_id",
+      "type": "string",
+      "doc": "References the TransactionEvent.event_id that was scored."
+    },
+    {
+      "name": "card_id",
+      "type": "string",
+      "doc": "Card identifier, denormalized from the transaction."
+    },
+    {
+      "name": "risk_score",
+      "type": "double",
+      "doc": "Computed risk score between 0.0 (safe) and 1.0 (high risk)."
+    },
+    {
+      "name": "risk_label",
+      "type": {
+        "type": "enum",
+        "name": "RiskLabel",
+        "symbols": ["LOW", "MEDIUM", "HIGH"]
+      },
+      "doc": "Human-readable risk classification derived from risk_score."
+    },
+    {
+      "name": "reasons",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "doc": "List of signal names that contributed to the score (e.g. HIGH_AMOUNT, FOREIGN_COUNTRY)."
+    },
+    {
+      "name": "evaluated_at",
+      "type": "string",
+      "doc": "ISO-8601 UTC timestamp of when the risk evaluation was performed."
+    },
+    {
+      "name": "schema_version",
+      "type": "int",
+      "default": 1,
+      "doc": "Schema version for auditability."
+    }
+  ]
+}

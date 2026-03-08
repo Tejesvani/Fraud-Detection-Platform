@@ -1,16 +1,23 @@
 import json
 import logging
 import os
+import sys
 from urllib.parse import quote_plus
 
 from confluent_kafka import Consumer, KafkaError
+from confluent_kafka.serialization import SerializationContext, MessageField
 from sqlalchemy import create_engine, text
+
+# Allow imports from project root
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+from shared.schema_registry import get_avro_deserializer, TOPIC_SCHEMA_MAP
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 
@@ -31,6 +38,9 @@ TOPIC_ALERTS = os.environ.get("KAFKA_TOPIC_ALERTS", "alerts")
 TOPICS = [TOPIC_TRANSACTIONS, TOPIC_RISK_SCORES, TOPIC_ALERTS]
 
 GROUP_ID = os.environ.get("KAFKA_GROUP_PERSISTENCE", "persistence-service-group")
+
+# Feature flag
+SCHEMA_REGISTRY_ENABLED = os.environ.get("SCHEMA_REGISTRY_ENABLED", "true").lower() == "true"
 
 # ── PostgreSQL config ──────────────────────────────────────────────────────────
 
@@ -129,6 +139,19 @@ def run():
         "enable.auto.commit": False,
     })
 
+    # Initialize per-topic Avro deserializers
+    topic_deserializers: dict = {}
+    if SCHEMA_REGISTRY_ENABLED:
+        try:
+            for topic_name, schema_name in TOPIC_SCHEMA_MAP.items():
+                topic_deserializers[topic_name] = get_avro_deserializer(schema_name)
+            logger.info("[Schema Registry] Avro deserialization ENABLED for %d topics", len(topic_deserializers))
+        except Exception as e:
+            logger.warning("[Schema Registry] Could not connect — falling back to JSON: %s", e)
+            topic_deserializers = {}
+    else:
+        logger.info("[Schema Registry] Avro deserialization DISABLED")
+
     consumer.subscribe(TOPICS)
 
     logger.info("Persistence Service started")
@@ -152,8 +175,17 @@ def run():
             topic = msg.topic()
             partition = msg.partition()
             offset = msg.offset()
-            raw_json = msg.value().decode("utf-8")
-            event = json.loads(raw_json)
+
+            # Deserialize: Avro or JSON
+            deserializer = topic_deserializers.get(topic)
+            if deserializer is not None:
+                ctx = SerializationContext(topic, MessageField.VALUE)
+                event = deserializer(msg.value(), ctx)
+                # For raw_event column, convert back to JSON string
+                raw_json = json.dumps(event)
+            else:
+                raw_json = msg.value().decode("utf-8")
+                event = json.loads(raw_json)
 
             handler = TOPIC_HANDLERS.get(topic)
             if handler is None:

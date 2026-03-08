@@ -1,16 +1,23 @@
 import json
 import os
+import sys
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Consumer, Producer, KafkaError
+from confluent_kafka.serialization import SerializationContext, MessageField
+
+# Allow imports from project root
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+from shared.schema_registry import get_avro_serializer, get_avro_deserializer
 
 
 # ── Risk label enum ────────────────────────────────────────────────────────────
@@ -32,6 +39,8 @@ HOME_COUNTRY = "US"
 
 # Stateful Stream: card_id → first observed device_id (considered as "home device")
 card_known_devices: dict[str, str] = {}
+
+SCHEMA_VERSION = 1
 
 
 # ── Scoring engine ─────────────────────────────────────────────────────────────
@@ -85,6 +94,7 @@ def score_transaction(txn: dict) -> dict:
         "risk_label": label.value,
         "reasons": reasons,
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "schema_version": SCHEMA_VERSION,
     }
 
 
@@ -123,6 +133,9 @@ INPUT_TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
 OUTPUT_TOPIC = os.environ.get("KAFKA_TOPIC_RISK_SCORES", "risk_scores")
 GROUP_ID = os.environ.get("KAFKA_GROUP_RISK_PROCESSOR", "risk-score-processor-group")
 
+# Feature flag
+SCHEMA_REGISTRY_ENABLED = os.environ.get("SCHEMA_REGISTRY_ENABLED", "true").lower() == "true"
+
 
 def delivery_callback(err, msg):
     if err:
@@ -139,9 +152,23 @@ def run():
 
     producer = Producer({
         "bootstrap.servers": KAFKA_BROKER,
-        "client.id": "risk-score-processor",    # name for the producer client
-        "queue.buffering.max.messages": 10000,  # safety cap on producer queue
+        "client.id": "risk-score-processor",
+        "queue.buffering.max.messages": 10000,
     })
+
+    # Initialize Avro serializer/deserializer
+    txn_deserializer = None
+    risk_serializer = None
+
+    if SCHEMA_REGISTRY_ENABLED:
+        try:
+            txn_deserializer = get_avro_deserializer("TransactionEvent")
+            risk_serializer = get_avro_serializer("RiskScoreEvent")
+            print("[Schema Registry] Avro serde ENABLED")
+        except Exception as e:
+            print(f"[Schema Registry] Could not connect — falling back to JSON: {e}")
+    else:
+        print("[Schema Registry] Avro serde DISABLED")
 
     consumer.subscribe([INPUT_TOPIC])
 
@@ -163,14 +190,26 @@ def run():
                 print(f"[ERROR] {msg.error()}")
                 continue
 
-            txn = json.loads(msg.value().decode("utf-8"))
+            # Deserialize: Avro or JSON
+            if txn_deserializer is not None:
+                ctx = SerializationContext(INPUT_TOPIC, MessageField.VALUE)
+                txn = txn_deserializer(msg.value(), ctx)
+            else:
+                txn = json.loads(msg.value().decode("utf-8"))
+
             risk_event = score_transaction(txn)
 
-            # Emit risk event to risk_scores topic, keyed by card_id
+            # Serialize: Avro or JSON
+            if risk_serializer is not None:
+                ctx = SerializationContext(OUTPUT_TOPIC, MessageField.VALUE)
+                value_bytes = risk_serializer(risk_event, ctx)
+            else:
+                value_bytes = json.dumps(risk_event).encode("utf-8")
+
             producer.produce(
                 topic=OUTPUT_TOPIC,
                 key=risk_event["card_id"],
-                value=json.dumps(risk_event),
+                value=value_bytes,
                 callback=delivery_callback,
             )
             producer.poll(0)

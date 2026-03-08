@@ -1,16 +1,23 @@
 import json
 import os
+import sys
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Consumer, Producer, KafkaError
+from confluent_kafka.serialization import SerializationContext, MessageField
+
+# Allow imports from project root
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+from shared.schema_registry import get_avro_serializer, get_avro_deserializer
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────────
@@ -35,6 +42,8 @@ ALERT_POLICY = {
     "HIGH":   (Severity.CRITICAL, Action.BLOCK_CARD),
 }
 
+SCHEMA_VERSION = 1
+
 
 # ── Alert builder ──────────────────────────────────────────────────────────────
 
@@ -52,6 +61,7 @@ def build_alert(risk_event: dict) -> dict:
         "action": action.value,
         "reasons": risk_event["reasons"],
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "schema_version": SCHEMA_VERSION,
     }
 
 
@@ -87,6 +97,9 @@ INPUT_TOPIC = os.environ.get("KAFKA_TOPIC_RISK_SCORES", "risk_scores")
 OUTPUT_TOPIC = os.environ.get("KAFKA_TOPIC_ALERTS", "alerts")
 GROUP_ID = os.environ.get("KAFKA_GROUP_ALERT_SERVICE", "alert-service-group")
 
+# Feature flag
+SCHEMA_REGISTRY_ENABLED = os.environ.get("SCHEMA_REGISTRY_ENABLED", "true").lower() == "true"
+
 
 def delivery_callback(err, msg):
     if err:
@@ -106,6 +119,20 @@ def run():
         "client.id": "alert-service",
         "queue.buffering.max.messages": 10000,
     })
+
+    # Initialize Avro serde
+    risk_deserializer = None
+    alert_serializer = None
+
+    if SCHEMA_REGISTRY_ENABLED:
+        try:
+            risk_deserializer = get_avro_deserializer("RiskScoreEvent")
+            alert_serializer = get_avro_serializer("AlertEvent")
+            print("[Schema Registry] Avro serde ENABLED")
+        except Exception as e:
+            print(f"[Schema Registry] Could not connect — falling back to JSON: {e}")
+    else:
+        print("[Schema Registry] Avro serde DISABLED")
 
     consumer.subscribe([INPUT_TOPIC])
 
@@ -127,7 +154,12 @@ def run():
                 print(f"[ERROR] {msg.error()}")
                 continue
 
-            risk_event = json.loads(msg.value().decode("utf-8"))
+            # Deserialize
+            if risk_deserializer is not None:
+                ctx = SerializationContext(INPUT_TOPIC, MessageField.VALUE)
+                risk_event = risk_deserializer(msg.value(), ctx)
+            else:
+                risk_event = json.loads(msg.value().decode("utf-8"))
 
             if risk_event["risk_label"] not in ALERT_POLICY:
                 consumer.commit(msg)
@@ -135,10 +167,17 @@ def run():
 
             alert = build_alert(risk_event)
 
+            # Serialize
+            if alert_serializer is not None:
+                ctx = SerializationContext(OUTPUT_TOPIC, MessageField.VALUE)
+                value_bytes = alert_serializer(alert, ctx)
+            else:
+                value_bytes = json.dumps(alert).encode("utf-8")
+
             producer.produce(
                 topic=OUTPUT_TOPIC,
                 key=alert["card_id"],
-                value=json.dumps(alert),
+                value=value_bytes,
                 callback=delivery_callback,
             )
             producer.poll(0)
