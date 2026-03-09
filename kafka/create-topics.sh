@@ -7,6 +7,7 @@ BOOTSTRAP_SERVER="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
 TOPIC_TRANSACTIONS="${KAFKA_TOPIC_TRANSACTIONS:-transactions}"
 TOPIC_RISK_SCORES="${KAFKA_TOPIC_RISK_SCORES:-risk_scores}"
 TOPIC_ALERTS="${KAFKA_TOPIC_ALERTS:-alerts}"
+TOPIC_DLQ="${KAFKA_TOPIC_DLQ:-dlq}"
 
 echo "Creating Kafka topics..."
 
@@ -33,5 +34,14 @@ docker exec kafka kafka-topics \
   --topic $TOPIC_ALERTS \
   --partitions 1 \
   --replication-factor 1
+
+docker exec kafka kafka-topics \
+  --bootstrap-server $BOOTSTRAP_SERVER \
+  --create \
+  --if-not-exists \
+  --topic $TOPIC_DLQ \
+  --partitions 1 \
+  --replication-factor 1 \
+  --config retention.ms=604800000
 
 echo "Kafka topics created successfully... "

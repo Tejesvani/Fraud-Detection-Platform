@@ -1,18 +1,26 @@
 import json
 import os
 import random
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
 from confluent_kafka import Producer
+from confluent_kafka.serialization import SerializationContext, MessageField
+
+# Allow imports from project root
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+from shared.schema_registry import get_avro_serializer
+from data_quality.contracts.transaction_contract import validate_transaction
 
 
 # ── Transaction type enum ──────────────────────────────────────────────────────
@@ -114,6 +122,9 @@ def maybe_inject_atm_anomaly(txn: dict) -> dict:
 
 # ── Transaction generator ──────────────────────────────────────────────────────
 
+SCHEMA_VERSION = 1
+
+
 def generate_transaction() -> dict:
     # Pick transaction type by weight
     types = list(TYPE_WEIGHTS.keys())
@@ -134,6 +145,7 @@ def generate_transaction() -> dict:
         "amount": amount,
         "country": HOME_COUNTRY,
         "device_id": CARD_HOME_DEVICES[card_id],
+        "schema_version": SCHEMA_VERSION,
     }
 
     # Independently apply fraud patterns — combinations happen naturally
@@ -150,6 +162,9 @@ def generate_transaction() -> dict:
 KAFKA_BROKER = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 TOPIC = os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "transactions")
 
+# Feature flag: set SCHEMA_REGISTRY_ENABLED=false to fall back to plain JSON
+SCHEMA_REGISTRY_ENABLED = os.environ.get("SCHEMA_REGISTRY_ENABLED", "true").lower() == "true"
+
 
 def delivery_callback(err, msg):
     if err:
@@ -165,17 +180,49 @@ def run():
         "queue.buffering.max.messages": 10000,  # safety cap
     })
 
+    # Initialize Avro serializer (registers schema on first use)
+    avro_serializer = None
+    if SCHEMA_REGISTRY_ENABLED:
+        try:
+            avro_serializer = get_avro_serializer("TransactionEvent")
+            print("[Schema Registry] Avro serialization ENABLED")
+        except Exception as e:
+            print(f"[Schema Registry] Could not connect — falling back to JSON: {e}")
+            avro_serializer = None
+    else:
+        print("[Schema Registry] Avro serialization DISABLED (SCHEMA_REGISTRY_ENABLED=false)")
+
     print(f"Transaction Streamer started — producing to '{TOPIC}' every 2s")
     print("Press Ctrl+C to stop\n")
+
+    rejected = 0
 
     try:
         while True:
             txn = generate_transaction()
 
+            # Layer 1 — producer-side validation (primary defense)
+            errors = validate_transaction(txn)
+            if errors:
+                print(
+                    f"\033[91m[REJECTED] event_id={txn['event_id']} "
+                    f"errors: {errors}\033[0m"
+                )
+                rejected += 1
+                time.sleep(2)
+                continue
+
+            # Serialize: Avro via Schema Registry, or plain JSON as fallback
+            if avro_serializer is not None:
+                ctx = SerializationContext(TOPIC, MessageField.VALUE)
+                value_bytes = avro_serializer(txn, ctx)
+            else:
+                value_bytes = json.dumps(txn).encode("utf-8")
+
             producer.produce(
                 topic=TOPIC,
                 key=txn["card_id"],
-                value=json.dumps(txn),
+                value=value_bytes,
                 callback=delivery_callback,
             )
             producer.poll(0)
@@ -192,6 +239,8 @@ def run():
         remaining = producer.flush(timeout=5)
         if remaining > 0:
             print(f"[WARN] {remaining} message(s) were not delivered")
+        if rejected > 0:
+            print(f"[STATS] {rejected} event(s) rejected by validation")
         print("Producer closed.")
 
 

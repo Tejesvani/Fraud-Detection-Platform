@@ -1,0 +1,70 @@
+{
+  "type": "record",
+  "name": "AlertEvent",
+  "namespace": "com.frauddetection.events",
+  "doc": "Alert event generated when a risk score triggers an operational action.",
+  "fields": [
+    {
+      "name": "alert_id",
+      "type": "string",
+      "doc": "Unique identifier for this alert (UUID v4)."
+    },
+    {
+      "name": "risk_event_id",
+      "type": "string",
+      "doc": "References the RiskScoreEvent that triggered this alert."
+    },
+    {
+      "name": "transaction_event_id",
+      "type": "string",
+      "doc": "References the original TransactionEvent, denormalized for query convenience."
+    },
+    {
+      "name": "card_id",
+      "type": "string",
+      "doc": "Card identifier, denormalized from the risk event."
+    },
+    {
+      "name": "risk_score",
+      "type": "double",
+      "doc": "Risk score at the time the alert was generated."
+    },
+    {
+      "name": "severity",
+      "type": {
+        "type": "enum",
+        "name": "Severity",
+        "symbols": ["INFO", "WARNING", "CRITICAL"]
+      },
+      "doc": "Alert severity level derived from the risk label."
+    },
+    {
+      "name": "action",
+      "type": {
+        "type": "enum",
+        "name": "Action",
+        "symbols": ["LOG_ONLY", "REVIEW_TRANSACTION", "BLOCK_CARD"]
+      },
+      "doc": "Operational action to take in response to the alert."
+    },
+    {
+      "name": "reasons",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "doc": "Risk signals that triggered this alert, carried from the risk event."
+    },
+    {
+      "name": "created_at",
+      "type": "string",
+      "doc": "ISO-8601 UTC timestamp of when the alert was created."
+    },
+    {
+      "name": "schema_version",
+      "type": "int",
+      "default": 1,
+      "doc": "Schema version for auditability."
+    }
+  ]
+}
