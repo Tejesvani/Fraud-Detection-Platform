@@ -75,9 +75,13 @@ jobs:
 
       - name: Register base branch schemas (current state)
         run: |
-          python base-branch/schemas/scripts/check_compatibility.py \
-            --registry-url http://localhost:8081 \
-            --register
+          if [ -f base-branch/schemas/scripts/check_compatibility.py ]; then
+            python base-branch/schemas/scripts/check_compatibility.py \
+              --registry-url http://localhost:8081 \
+              --register
+          else
+            echo "No base branch schemas script found (first-time introduction) — skipping registration."
+          fi
 
       - name: Check PR schemas for compatibility
         run: |
