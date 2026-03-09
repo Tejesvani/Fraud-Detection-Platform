@@ -18,6 +18,7 @@ except ImportError:
     pass
 
 from shared.schema_registry import get_avro_serializer, get_avro_deserializer
+from data_quality.contracts.alert_contract import validate_alert
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────────
@@ -166,6 +167,16 @@ def run():
                 continue
 
             alert = build_alert(risk_event)
+
+            # Layer 1 — producer-side validation (primary defense)
+            errors = validate_alert(alert)
+            if errors:
+                print(
+                    f"\033[91m[REJECTED] alert_id={alert['alert_id']} "
+                    f"errors: {errors}\033[0m"
+                )
+                consumer.commit(msg)
+                continue
 
             # Serialize
             if alert_serializer is not None:

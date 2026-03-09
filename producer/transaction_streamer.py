@@ -20,6 +20,7 @@ except ImportError:
     pass
 
 from shared.schema_registry import get_avro_serializer
+from data_quality.contracts.transaction_contract import validate_transaction
 
 
 # ── Transaction type enum ──────────────────────────────────────────────────────
@@ -194,9 +195,22 @@ def run():
     print(f"Transaction Streamer started — producing to '{TOPIC}' every 2s")
     print("Press Ctrl+C to stop\n")
 
+    rejected = 0
+
     try:
         while True:
             txn = generate_transaction()
+
+            # Layer 1 — producer-side validation (primary defense)
+            errors = validate_transaction(txn)
+            if errors:
+                print(
+                    f"\033[91m[REJECTED] event_id={txn['event_id']} "
+                    f"errors: {errors}\033[0m"
+                )
+                rejected += 1
+                time.sleep(2)
+                continue
 
             # Serialize: Avro via Schema Registry, or plain JSON as fallback
             if avro_serializer is not None:
@@ -225,6 +239,8 @@ def run():
         remaining = producer.flush(timeout=5)
         if remaining > 0:
             print(f"[WARN] {remaining} message(s) were not delivered")
+        if rejected > 0:
+            print(f"[STATS] {rejected} event(s) rejected by validation")
         print("Producer closed.")
 
 

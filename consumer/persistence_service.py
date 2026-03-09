@@ -178,14 +178,22 @@ def run():
 
             # Deserialize: Avro or JSON
             deserializer = topic_deserializers.get(topic)
-            if deserializer is not None:
-                ctx = SerializationContext(topic, MessageField.VALUE)
-                event = deserializer(msg.value(), ctx)
-                # For raw_event column, convert back to JSON string
-                raw_json = json.dumps(event)
-            else:
-                raw_json = msg.value().decode("utf-8")
-                event = json.loads(raw_json)
+            try:
+                if deserializer is not None:
+                    ctx = SerializationContext(topic, MessageField.VALUE)
+                    event = deserializer(msg.value(), ctx)
+                    # For raw_event column, convert back to JSON string
+                    raw_json = json.dumps(event)
+                else:
+                    raw_json = msg.value().decode("utf-8")
+                    event = json.loads(raw_json)
+            except Exception as exc:
+                logger.warning(
+                    "Deserialization failed topic=%-15s partition=%d offset=%d: %s — skipping",
+                    topic, partition, offset, exc,
+                )
+                consumer.commit(msg)
+                continue
 
             handler = TOPIC_HANDLERS.get(topic)
             if handler is None:

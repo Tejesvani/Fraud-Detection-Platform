@@ -18,6 +18,7 @@ except ImportError:
     pass
 
 from shared.schema_registry import get_avro_serializer, get_avro_deserializer
+from data_quality.contracts.risk_score_contract import validate_risk_score
 
 
 # ── Risk label enum ────────────────────────────────────────────────────────────
@@ -191,13 +192,28 @@ def run():
                 continue
 
             # Deserialize: Avro or JSON
-            if txn_deserializer is not None:
-                ctx = SerializationContext(INPUT_TOPIC, MessageField.VALUE)
-                txn = txn_deserializer(msg.value(), ctx)
-            else:
-                txn = json.loads(msg.value().decode("utf-8"))
+            try:
+                if txn_deserializer is not None:
+                    ctx = SerializationContext(INPUT_TOPIC, MessageField.VALUE)
+                    txn = txn_deserializer(msg.value(), ctx)
+                else:
+                    txn = json.loads(msg.value().decode("utf-8"))
+            except Exception as exc:
+                print(f"\033[93m[DESER_ERROR]\033[0m topic={INPUT_TOPIC} error={exc} — skipping message")
+                consumer.commit(msg)
+                continue
 
             risk_event = score_transaction(txn)
+
+            # Layer 1 — producer-side validation (primary defense)
+            errors = validate_risk_score(risk_event)
+            if errors:
+                print(
+                    f"\033[91m[REJECTED] risk_event_id={risk_event['risk_event_id']} "
+                    f"errors: {errors}\033[0m"
+                )
+                consumer.commit(msg)
+                continue
 
             # Serialize: Avro or JSON
             if risk_serializer is not None:

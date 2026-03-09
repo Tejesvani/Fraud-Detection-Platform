@@ -19,6 +19,8 @@ try:
 except ImportError:
     pass
 
+from data_quality.contracts.transaction_contract import validate_transaction
+
 
 # ── Kafka config ───────────────────────────────────────────────────────────────
 
@@ -238,6 +240,13 @@ if st.button("Submit Transaction", type="primary", use_container_width=True):
         "device_id": device_id,
         "schema_version": 1,
     }
+
+    # Layer 1 — producer-side validation (primary defense)
+    validation_errors = validate_transaction(txn)
+    if validation_errors:
+        for ve in validation_errors:
+            st.error(f"[{ve['rule']}] {ve['message']}")
+        st.stop()
 
     # Set up consumer BEFORE producing so it's ready to catch the alert
     alert_consumer = create_alert_consumer()
