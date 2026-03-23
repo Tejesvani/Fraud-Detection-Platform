@@ -19,5 +19,10 @@ build/
 .DS_Store
 Thumbs.db
 
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
 # Environment variables
 .env

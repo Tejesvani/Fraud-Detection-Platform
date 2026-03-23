@@ -233,5 +233,32 @@ services:
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
     restart: on-failure
 
+  dbt:
+    build:
+      context: ./dbt
+      dockerfile: Dockerfile
+    container_name: dbt
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+    restart: "no"
+    # Delay start to let the persistence service populate some data first
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "Waiting 60s for data to accumulate..."
+        sleep 60
+        echo "Running dbt..."
+        dbt run --profiles-dir .
+        echo "Running dbt tests..."
+        dbt test --profiles-dir .
+        echo "dbt complete."
+
 volumes:
   postgres_data:

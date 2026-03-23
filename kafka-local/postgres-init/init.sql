@@ -4,6 +4,9 @@
 -- Idempotent: safe to re-run (IF NOT EXISTS on all objects)
 -- ============================================================================
 
+-- ── Analytics schema (used by dbt) ──────────────────────────────────────────
+CREATE SCHEMA IF NOT EXISTS analytics;
+
 -- ── transactions ────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS transactions (

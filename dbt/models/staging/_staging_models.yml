@@ -1,0 +1,90 @@
+version: 2
+
+models:
+  - name: stg_transactions
+    description: "Cleaned and typed transaction events from the raw transactions table"
+    columns:
+      - name: event_id
+        description: "UUID v4 primary key"
+        tests:
+          - unique
+          - not_null
+      - name: card_id
+        tests:
+          - not_null
+      - name: transaction_timestamp
+        tests:
+          - not_null
+      - name: amount
+        tests:
+          - not_null
+      - name: transaction_type
+        tests:
+          - accepted_values:
+              values:
+                - pos_purchase
+                - online_purchase
+                - subscription
+                - high_value_retail
+                - atm_withdrawal
+                - international_purchase
+
+  - name: stg_risk_scores
+    description: "Cleaned and typed risk scoring results from the raw risk_scores table"
+    columns:
+      - name: risk_event_id
+        description: "UUID v4 primary key"
+        tests:
+          - unique
+          - not_null
+      - name: transaction_event_id
+        tests:
+          - not_null
+      - name: card_id
+        tests:
+          - not_null
+      - name: evaluated_at
+        tests:
+          - not_null
+      - name: risk_label
+        tests:
+          - accepted_values:
+              values:
+                - LOW
+                - MEDIUM
+                - HIGH
+
+  - name: stg_alerts
+    description: "Cleaned and typed alert events from the raw alerts table"
+    columns:
+      - name: alert_id
+        description: "UUID v4 primary key"
+        tests:
+          - unique
+          - not_null
+      - name: risk_event_id
+        tests:
+          - not_null
+      - name: transaction_event_id
+        tests:
+          - not_null
+      - name: card_id
+        tests:
+          - not_null
+      - name: alerted_at
+        tests:
+          - not_null
+      - name: severity
+        tests:
+          - accepted_values:
+              values:
+                - INFO
+                - WARNING
+                - CRITICAL
+      - name: action
+        tests:
+          - accepted_values:
+              values:
+                - LOG_ONLY
+                - REVIEW_TRANSACTION
+                - BLOCK_CARD

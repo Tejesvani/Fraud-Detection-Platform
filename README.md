@@ -43,8 +43,8 @@ A real-time fraud detection system built on Apache Kafka. Simulated card transac
                               └───────────────────────────┘
                                         │
                               ┌─────────▼─────────┐
-                              │  Schema Registry   │  ←── All producers register/validate
-                              │  (localhost:8081)  │       schemas before producing
+                              │  Schema Registry  │  ←── All producers register/validate
+                              │  (localhost:8081) │       schemas before producing
                               └───────────────────┘
                                         │ consume (all 3 topics)
                                         ▼
@@ -68,6 +68,21 @@ The system is a Kafka-based event-driven fraud detection pipeline with a two-lay
 4. **Persistence Service** consumes from all three topics (Avro), deserializes, and persists every event to PostgreSQL with idempotent inserts.
 5. **Validation Service (Layer 2)** independently consumes from all three topics in parallel, re-validates every event, and routes failures (including deserialization errors from non-Avro messages) to the `dlq` topic as JSON.
 6. For UI-submitted transactions, the Streamlit UI polls the `alerts` topic, deserializes (Avro), matches on `transaction_event_id`, and displays the fraud analysis result.
+7. **dbt** runs as a scheduled batch process on top of the streaming pipeline, reading from the raw PostgreSQL tables (`public` schema) and building an analytical layer in the `analytics` schema.
+
+**dbt transformation flow (batch layer):**
+
+```
+PostgreSQL (public schema)          dbt (batch, scheduled)          PostgreSQL (analytics schema)
+├── transactions          ──────>   ├── stg_transactions    ──────> ├── fact_fraud_events
+├── risk_scores           ──────>   ├── stg_risk_scores     ──────> ├── dim_cards
+└── alerts                ──────>   └── stg_alerts          ──────> ├── dim_merchants
+                                                                    ├── dim_dates
+                                                                    ├── agg_daily_fraud_summary
+                                                                    └── agg_hourly_card_velocity
+```
+
+Staging models are **views** (always fresh, no extra storage). Marts and aggregates are **tables** (pre-computed for query performance). All models write to the `analytics` schema — the raw tables in `public` are never modified.
 
 ---
 
@@ -129,6 +144,34 @@ fraud-detection-platform/
 ├── frontend/
 │   ├── Dockerfile
 │   └── app.py                          # Streamlit UI — manual transaction submission
+├── dbt/
+│   ├── Dockerfile                      # dbt-postgres image (runs dbt run + dbt test)
+│   ├── dbt_project.yml                 # Project config — model paths, materialization strategy
+│   ├── profiles.yml                    # DB connection via POSTGRES_* env vars
+│   ├── models/
+│   │   ├── sources.yml                 # Raw table definitions + source freshness checks
+│   │   ├── staging/
+│   │   │   ├── _staging_models.yml     # Schema tests for staging models
+│   │   │   ├── stg_transactions.sql    # Cleans raw transactions, extracts JSONB fields
+│   │   │   ├── stg_risk_scores.sql     # Cleans raw risk_scores, extracts JSONB fields
+│   │   │   └── stg_alerts.sql          # Cleans raw alerts, extracts JSONB fields
+│   │   ├── marts/
+│   │   │   ├── _marts_models.yml       # Schema tests for mart models
+│   │   │   ├── fact_fraud_events.sql   # Pre-joined fact table (transaction + risk + alert)
+│   │   │   ├── dim_cards.sql           # Card-level aggregates (fraud rate, avg amount)
+│   │   │   ├── dim_merchants.sql       # Merchant category fraud statistics
+│   │   │   └── dim_dates.sql           # Standard date dimension (generated date spine)
+│   │   └── aggregates/
+│   │       ├── _aggregates_models.yml  # Schema tests for aggregate models
+│   │       ├── agg_daily_fraud_summary.sql     # Daily rollup for dashboard consumption
+│   │       └── agg_hourly_card_velocity.sql    # Hourly per-card velocity analysis
+│   ├── tests/
+│   │   ├── assert_risk_score_range.sql         # Fails if risk_score outside [0, 1]
+│   │   ├── assert_referential_integrity.sql    # Fails if risk_score has no matching transaction
+│   │   ├── assert_positive_amounts.sql         # Fails if amount <= 0
+│   │   └── assert_severity_action_consistent.sql  # Fails on invalid severity/action pairs
+│   └── macros/
+│       └── generate_date_spine.sql     # PostgreSQL generate_series date spine macro
 ├── docker-compose.yml                  # Full-stack: infrastructure + all application services
 ├── .env                                # Runtime env vars for Python services (not committed)
 ├── .env.example                        # Template for root .env
@@ -292,6 +335,94 @@ python data_quality/dlq_reprocessor.py reprocess --topic transactions
 `inspect` prints each failed event with its original topic, card_id, validation errors, and timestamp, followed by a summary: total events, breakdown by topic, and the top-5 most common rule failures.
 
 `reprocess` extracts `original_event` from matching DLQ messages and re-publishes to the original topic using the appropriate Avro serializer. Use this after fixing a contract bug or updating a rule, to replay events that were incorrectly rejected.
+
+---
+
+## Data Warehouse & Analytics (dbt)
+
+The raw PostgreSQL tables (`public` schema) are OLTP-optimized — designed for fast writes from the Kafka consumers, not for analytics queries. **dbt** transforms these raw event tables into a structured analytical model that's purpose-built for querying.
+
+### Why dbt
+
+- The raw tables store denormalized events with fields split between typed columns and a `raw_event` JSONB blob — dbt staging models reconcile this.
+- Joining `transactions → risk_scores → alerts` on every dashboard query is expensive; `fact_fraud_events` pre-joins them into one row per transaction.
+- Aggregates like daily fraud rate, per-card velocity, and merchant-level risk are expensive to compute ad-hoc; pre-computed tables make them instant.
+- dbt runs as a **batch process** on top of the streaming pipeline — it reads after the persistence service has written events, and writes to the `analytics` schema without touching the raw tables.
+
+### Three-layer model
+
+**Staging (views)** — Clean and type-cast the raw tables. Extract fields from `raw_event` JSONB that aren't in the typed columns. Always fresh because they're views.
+
+| Model | Source table | Key additions |
+|-------|-------------|---------------|
+| `stg_transactions` | `public.transactions` | Extracts `transaction_type`, `merchant_category`, `schema_version` from JSONB |
+| `stg_risk_scores` | `public.risk_scores` | Extracts `reasons`, `schema_version` from JSONB |
+| `stg_alerts` | `public.alerts` | Extracts `risk_score_at_alert`, `reasons`, `schema_version` from JSONB |
+
+**Marts (tables)** — Pre-joined, pre-computed analytical tables. Materialized as tables for query performance.
+
+| Model | Grain | Key columns |
+|-------|-------|-------------|
+| `fact_fraud_events` | One row per transaction | All fields from all 3 staging models, plus `scoring_latency_ms`, `end_to_end_latency_ms`, `is_blocked`, `is_flagged` |
+| `dim_cards` | One row per `card_id` | `total_transactions`, `fraud_rate_pct`, `avg_risk_score`, `distinct_countries`, `distinct_devices` |
+| `dim_merchants` | One row per `merchant_category` | `total_transactions`, `fraud_rate_pct`, `avg_amount`, `distinct_cards` |
+| `dim_dates` | One row per calendar date | Year, month, day, week, quarter, `is_weekend` — generated via date spine macro |
+
+**Aggregates (tables)** — Pre-rolled-up summaries for dashboards.
+
+| Model | Grain | Key columns |
+|-------|-------|-------------|
+| `agg_daily_fraud_summary` | One row per day | `fraud_rate_pct`, `blocked_amount`, `avg_latency_ms`, `distinct_cards` |
+| `agg_hourly_card_velocity` | One row per card per hour | `transaction_count`, `flagged_count`, `blocked_count`, `distinct_countries` |
+
+### dbt Tests
+
+53 tests run on every `dbt test` execution:
+
+- **Schema tests** — `not_null` and `unique` on all primary keys; `not_null` on all foreign keys and critical fields; `accepted_values` for `transaction_type`, `risk_label`, `severity`, `action`.
+- **Custom tests** — `assert_risk_score_range` (score in \[0, 1\]), `assert_referential_integrity` (every risk score has a matching transaction), `assert_positive_amounts` (amount > 0), `assert_severity_action_consistent` (INFO→LOG\_ONLY, WARNING→REVIEW\_TRANSACTION, CRITICAL→BLOCK\_CARD).
+- **Source freshness** — warns after 10 minutes, errors after 30 minutes of no new data.
+
+### Running dbt
+
+```bash
+# Locally (from dbt/ directory — requires PostgreSQL running)
+cd dbt
+dbt run --profiles-dir .          # build all 9 models
+dbt test --profiles-dir .         # run all 53 tests
+dbt source freshness --profiles-dir .        # check source freshness
+
+# Run a single model and all downstream dependents
+dbt run --profiles-dir . --select stg_transactions+
+
+# Via Docker (after data has accumulated in PostgreSQL)
+docker compose run dbt
+```
+
+> **Note:** The `dbt` binary in your PATH may be `dbt-fusion` (a preview Rust rewrite) which has known crashes. Use the venv's dbt explicitly if needed: `../venv/bin/dbt run --profiles-dir .`
+
+### Querying analytical tables
+
+```bash
+docker exec -it postgres psql -U fraud_user -d fraud_detection_db
+```
+
+```sql
+-- Top riskiest cards
+SELECT card_id, total_transactions, fraud_rate_pct, avg_risk_score
+FROM analytics.dim_cards ORDER BY fraud_rate_pct DESC;
+
+-- Fraud rate by merchant category
+SELECT merchant_category, total_transactions, fraud_rate_pct
+FROM analytics.dim_merchants ORDER BY fraud_rate_pct DESC;
+
+-- Daily fraud summary
+SELECT * FROM analytics.agg_daily_fraud_summary ORDER BY summary_date DESC;
+
+-- End-to-end latency by severity
+SELECT severity, count(*), round(avg(end_to_end_latency_ms)::numeric, 2) AS avg_latency_ms
+FROM analytics.fact_fraud_events GROUP BY severity;
+```
 
 ---
 
@@ -546,7 +677,16 @@ docker compose logs validation-service | grep -E "DESER_ERROR|FAILED"
 python data_quality/dlq_reprocessor.py inspect
 ```
 
-**9. Stop everything:**
+**9. Build analytical models with dbt (after data has accumulated):**
+```bash
+# Run as a one-off container — builds all 9 models then runs all 53 tests
+docker compose run dbt
+
+# Or locally (from dbt/ directory)
+cd dbt && dbt run --profiles-dir . && dbt test --profiles-dir .
+```
+
+**11. Stop everything:**
 ```bash
 docker compose down        # stop, keep data volumes
 docker compose down -v     # stop + full reset (removes volumes)
@@ -567,6 +707,7 @@ docker compose down -v     # stop + full reset (removes volumes)
 | Persistence Service | `persistence-service` | — | Writes all events to PostgreSQL |
 | Validation Service | `validation-service` | — | Audits all events, routes failures to DLQ |
 | Streamlit UI | `frontend` | 8501 | Manual transaction submission |
+| dbt | `dbt` | — | Batch: builds analytical models in `analytics` schema (run with `docker compose run dbt`) |
 
 All application services use the internal Kafka address `kafka:29092` and Schema Registry at `http://schema-registry:8081`. These environment variables are injected by the compose file automatically.
 
@@ -828,6 +969,17 @@ pytest data_quality/tests/test_alert_contract.py -v
 
 96 tests cover every validation rule in isolation, boundary values (e.g., `risk_score` exactly 0.0, 0.3, 0.7, 1.0), cross-field consistency (label/score, severity/action), and multi-failure scenarios.
 
+### dbt tests
+
+```bash
+# Run all 53 dbt tests (schema tests + custom assertions)
+cd dbt
+dbt test --profiles-dir .
+
+# Check source freshness (warns >10 min, errors >30 min)
+dbt source freshness --profiles-dir .
+```
+
 ### End-to-end DLQ test
 
 Inject a malformed event directly into Kafka (bypassing Avro) to test deserialization error handling and DLQ routing:
@@ -904,3 +1056,10 @@ docker compose down -v     # full reset
 - [x] Full-stack Docker Compose at project root — one command starts infrastructure + all application services
 - [x] Health checks on all infrastructure services (Zookeeper, Kafka, Schema Registry, PostgreSQL)
 - [x] Dockerfiles for all application services (monorepo build context, project root)
+- [x] dbt analytics layer — staging views, fact/dimension tables, pre-computed aggregates
+- [x] 9 dbt models across 3 layers (staging views, mart tables, aggregate tables)
+- [x] 53 dbt tests (schema tests, custom SQL assertions, source freshness checks)
+- [x] `analytics` schema separation — raw OLTP tables in `public` untouched by dbt
+- [x] Date dimension with PostgreSQL `generate_series` date spine macro
+- [x] End-to-end latency tracking (`scoring_latency_ms`, `end_to_end_latency_ms`) in fact table
+- [x] dbt Dockerized — `docker compose run dbt` builds all models and runs all tests
