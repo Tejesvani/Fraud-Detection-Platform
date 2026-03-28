@@ -233,6 +233,27 @@ services:
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
     restart: on-failure
 
+  reconciliation:
+    build:
+      context: .
+      dockerfile: reconciliation/Dockerfile
+    container_name: reconciliation
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      POSTGRES_HOST: postgres
+    restart: "no"
+    profiles:
+      - tools
+
   dbt:
     build:
       context: ./dbt

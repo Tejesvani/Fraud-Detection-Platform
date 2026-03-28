@@ -64,3 +64,24 @@ CREATE INDEX IF NOT EXISTS idx_alerts_card_id
 
 CREATE INDEX IF NOT EXISTS idx_alerts_severity
     ON alerts (severity);
+
+-- ── reconciliation_log ──────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS reconciliation_log (
+    id              SERIAL          PRIMARY KEY,
+    run_timestamp   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    topic           VARCHAR(50)     NOT NULL,
+    kafka_available BIGINT          NOT NULL,
+    kafka_committed BIGINT          NOT NULL,
+    postgres_count  BIGINT          NOT NULL,
+    delta           BIGINT          NOT NULL,
+    match_rate_pct  NUMERIC(6, 3)   NOT NULL,
+    status          VARCHAR(20)     NOT NULL,
+    details         JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_reconciliation_log_topic
+    ON reconciliation_log (topic);
+
+CREATE INDEX IF NOT EXISTS idx_reconciliation_log_timestamp
+    ON reconciliation_log (run_timestamp);
