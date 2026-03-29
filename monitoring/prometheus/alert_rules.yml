@@ -1,0 +1,38 @@
+groups:
+  - name: fraud_pipeline
+    rules:
+      - alert: HighConsumerLag
+        expr: fraud_risk_processor_consumer_lag > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Risk processor consumer lag is high"
+          description: "Consumer lag has been above 100 for 5 minutes"
+
+      - alert: DLQGrowing
+        expr: rate(fraud_dlq_events_produced_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Events are being routed to DLQ"
+          description: "DLQ receive rate has been non-zero for 2 minutes"
+
+      - alert: PersistenceErrors
+        expr: rate(fraud_persist_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database write errors detected"
+          description: "Persistence errors have occurred in the last minute"
+
+      - alert: ValidationFailureSpike
+        expr: rate(fraud_validation_failures_total[5m]) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Validation failure rate is elevated"
+          description: "More than 1 validation failure per second for 2 minutes"

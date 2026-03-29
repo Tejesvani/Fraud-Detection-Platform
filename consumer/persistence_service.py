@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+import time
 from urllib.parse import quote_plus
 
 from confluent_kafka import Consumer, KafkaError
@@ -18,8 +19,34 @@ except ImportError:
     pass
 
 from shared.schema_registry import get_avro_deserializer, TOPIC_SCHEMA_MAP
+from shared.observability import setup_observability, get_logger
 
-# ── Logging ────────────────────────────────────────────────────────────────────
+# ── Prometheus metrics ─────────────────────────────────────────────────────────
+
+from prometheus_client import Counter, Histogram, Gauge
+
+EVENTS_PERSISTED = Counter(
+    "fraud_events_persisted_total",
+    "Total events persisted to PostgreSQL",
+    ["topic"],
+)
+PERSIST_ERRORS = Counter(
+    "fraud_persist_errors_total",
+    "Total persistence errors",
+    ["topic"],
+)
+DB_WRITE_LATENCY = Histogram(
+    "fraud_db_write_latency_seconds",
+    "Time to write an event to PostgreSQL",
+    ["topic"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+)
+CONSUMER_LAG = Gauge(
+    "fraud_persistence_service_consumer_lag",
+    "Consumer lag for persistence service",
+)
+
+# ── Logging (stdlib fallback — structlog configured in run()) ──────────────────
 
 logging.basicConfig(
     level=logging.INFO,
@@ -132,6 +159,9 @@ TOPIC_HANDLERS = {
 # ── Main consumer loop ────────────────────────────────────────────────────────
 
 def run():
+    setup_observability(service_name="persistence-service", metrics_port=8003)
+    slogger = get_logger()
+
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": GROUP_ID,
@@ -158,6 +188,9 @@ def run():
     logger.info("  consuming from : %s", ", ".join(TOPICS))
     logger.info("  persisting to  : PostgreSQL (fraud_detection_db)")
     logger.info("Press Ctrl+C to stop\n")
+
+    _last_lag_check = 0.0
+    _LAG_CHECK_INTERVAL = 10  # seconds
 
     try:
         while True:
@@ -202,10 +235,33 @@ def run():
                 continue
 
             try:
-                handler(event, raw_json)
+                with DB_WRITE_LATENCY.labels(topic=topic).time():
+                    handler(event, raw_json)
                 consumer.commit(msg)
+                EVENTS_PERSISTED.labels(topic=topic).inc()
                 logger.info("Persisted  topic=%-15s partition=%d  offset=%d", topic, partition, offset)
+                event_id = (event.get("event_id") or event.get("risk_event_id")
+                            or event.get("alert_id") or "unknown")
+                slogger.info("event_persisted", topic=topic, partition=partition,
+                             offset=offset, event_id=event_id)
+
+                now = time.time()
+                if now - _last_lag_check >= _LAG_CHECK_INTERVAL:
+                    try:
+                        total_lag = 0
+                        for tp in consumer.assignment():
+                            (low, high) = consumer.get_watermark_offsets(tp, timeout=5.0)
+                            committed_offsets = consumer.committed([tp], timeout=5.0)
+                            if committed_offsets and committed_offsets[0].offset >= 0:
+                                total_lag += high - committed_offsets[0].offset
+                            else:
+                                total_lag += high - low
+                        CONSUMER_LAG.set(total_lag)
+                    except Exception:
+                        pass
+                    _last_lag_check = now
             except Exception:
+                PERSIST_ERRORS.labels(topic=topic).inc()
                 logger.exception("DB insert failed  topic=%-15s partition=%d  offset=%d — offset NOT committed", topic, partition, offset)
 
     except KeyboardInterrupt:

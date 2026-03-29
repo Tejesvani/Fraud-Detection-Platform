@@ -20,7 +20,23 @@ except ImportError:
     pass
 
 from shared.schema_registry import get_avro_serializer
+from shared.observability import setup_observability, get_logger
 from data_quality.contracts.transaction_contract import validate_transaction
+
+# ── Prometheus metrics ─────────────────────────────────────────────────────────
+
+from prometheus_client import Counter, Histogram
+
+EVENTS_PRODUCED = Counter(
+    "fraud_transactions_produced_total",
+    "Total transactions produced",
+    ["status"],  # 'success' | 'rejected'
+)
+PRODUCE_LATENCY = Histogram(
+    "fraud_transaction_produce_latency_seconds",
+    "Time to serialize and produce a transaction",
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+)
 
 
 # ── Transaction type enum ──────────────────────────────────────────────────────
@@ -174,6 +190,9 @@ def delivery_callback(err, msg):
 
 
 def run():
+    setup_observability(service_name="transaction-streamer", metrics_port=8000)
+    logger = get_logger()
+
     producer = Producer({
         "bootstrap.servers": KAFKA_BROKER,
         "client.id": "transaction-streamer",
@@ -192,7 +211,7 @@ def run():
     else:
         print("[Schema Registry] Avro serialization DISABLED (SCHEMA_REGISTRY_ENABLED=false)")
 
-    print(f"Transaction Streamer started — producing to '{TOPIC}' every 2s")
+    print(f"Transaction Streamer started — producing to '{TOPIC}' every 0.5s")
     print("Press Ctrl+C to stop\n")
 
     rejected = 0
@@ -208,24 +227,33 @@ def run():
                     f"\033[91m[REJECTED] event_id={txn['event_id']} "
                     f"errors: {errors}\033[0m"
                 )
+                logger.warning("transaction_rejected", event_id=txn["event_id"],
+                               card_id=txn["card_id"], errors=errors)
+                EVENTS_PRODUCED.labels(status="rejected").inc()
                 rejected += 1
-                time.sleep(2)
+                time.sleep(0.5)
                 continue
 
             # Serialize: Avro via Schema Registry, or plain JSON as fallback
-            if avro_serializer is not None:
-                ctx = SerializationContext(TOPIC, MessageField.VALUE)
-                value_bytes = avro_serializer(txn, ctx)
-            else:
-                value_bytes = json.dumps(txn).encode("utf-8")
+            with PRODUCE_LATENCY.time():
+                if avro_serializer is not None:
+                    ctx = SerializationContext(TOPIC, MessageField.VALUE)
+                    value_bytes = avro_serializer(txn, ctx)
+                else:
+                    value_bytes = json.dumps(txn).encode("utf-8")
 
-            producer.produce(
-                topic=TOPIC,
-                key=txn["card_id"],
-                value=value_bytes,
-                callback=delivery_callback,
-            )
-            producer.poll(0)
+                producer.produce(
+                    topic=TOPIC,
+                    key=txn["card_id"],
+                    value=value_bytes,
+                    callback=delivery_callback,
+                )
+                producer.poll(0)
+
+            EVENTS_PRODUCED.labels(status="success").inc()
+            logger.info("transaction_produced", event_id=txn["event_id"],
+                        card_id=txn["card_id"], amount=txn["amount"],
+                        country=txn["country"], transaction_type=txn["transaction_type"])
 
             print(f"  card={txn['card_id']:<7} type={txn['transaction_type']:<24} "
                   f"amount=${txn['amount']:<9} country={txn['country']} "

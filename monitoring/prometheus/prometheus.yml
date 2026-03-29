@@ -1,0 +1,43 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+scrape_configs:
+# To support scaling, DNS service discovery is used for each component. This allows Prometheus to automatically discover and scrape metrics from all instances of each service, even as they are scaled up or down.
+  - job_name: "transaction-streamer"
+    dns_sd_configs:
+      - names:
+          - "transaction-streamer"
+        type: A
+        port: 8000
+
+  - job_name: "risk-processor"
+    dns_sd_configs:
+      - names:
+          - "risk-processor"
+        type: A
+        port: 8001
+
+  - job_name: "alert-service"
+    dns_sd_configs:
+      - names:
+          - "alert-service"
+        type: A
+        port: 8002
+
+  - job_name: "persistence-service"
+    dns_sd_configs:
+      - names:
+          - "persistence-service"
+        type: A
+        port: 8003
+
+  - job_name: "validation-service"
+    dns_sd_configs:
+      - names:
+          - "validation-service"
+        type: A
+        port: 8004
