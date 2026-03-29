@@ -1,0 +1,122 @@
+{
+  "uid": "fraud-reconciliation",
+  "title": "Fraud Detection — Reconciliation",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "topic",
+        "type": "custom",
+        "label": "Topic",
+        "current": { "text": "transactions", "value": "transactions" },
+        "options": [
+          { "text": "transactions", "value": "transactions" },
+          { "text": "risk_scores",  "value": "risk_scores" },
+          { "text": "alerts",       "value": "alerts" }
+        ],
+        "query": "transactions,risk_scores,alerts"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Match Rate Over Time (%)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 16, "h": 8 },
+      "datasource": { "type": "postgres", "uid": "postgresql" },
+      "targets": [
+        {
+          "rawSql": "SELECT run_timestamp AS time, match_rate_pct AS \"Match Rate %\" FROM reconciliation_log WHERE topic = '$topic' ORDER BY run_timestamp",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 90,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 99 },
+              { "color": "green",  "value": 99.9 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Delta (Kafka − PostgreSQL) Over Time",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+      "datasource": { "type": "postgres", "uid": "postgresql" },
+      "targets": [
+        {
+          "rawSql": "SELECT run_timestamp AS time, delta FROM reconciliation_log WHERE topic = '$topic' ORDER BY run_timestamp",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red",    "value": 100 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Latest Reconciliation Status (all topics)",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+      "datasource": { "type": "postgres", "uid": "postgresql" },
+      "targets": [
+        {
+          "rawSql": "SELECT DISTINCT ON (topic) run_timestamp, topic, kafka_available, kafka_committed, postgres_count, delta, match_rate_pct, status FROM reconciliation_log ORDER BY topic, run_timestamp DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "sortBy": [{ "displayName": "topic", "desc": false }]
+      },
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "match_rate_pct" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "red",    "value": null },
+                    { "color": "yellow", "value": 99 },
+                    { "color": "green",  "value": 99.9 }
+                  ]
+                }
+              },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

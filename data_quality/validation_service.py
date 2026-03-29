@@ -41,10 +41,35 @@ except ImportError:
     pass
 
 from shared.schema_registry import TOPIC_SCHEMA_MAP, get_avro_deserializer
+from shared.observability import setup_observability, get_logger
 
 from data_quality.contracts.transaction_contract import validate_transaction
 from data_quality.contracts.risk_score_contract import validate_risk_score
 from data_quality.contracts.alert_contract import validate_alert
+
+# ── Prometheus metrics ─────────────────────────────────────────────────────────
+
+from prometheus_client import Counter, Gauge
+
+EVENTS_VALIDATED = Counter(
+    "fraud_events_validated_total",
+    "Total events validated",
+    ["topic", "result"],  # result: 'valid' | 'failed' | 'deser_error'
+)
+VALIDATION_FAILURES = Counter(
+    "fraud_validation_failures_total",
+    "Validation failures by rule",
+    ["topic", "rule"],
+)
+DLQ_EVENTS_PRODUCED = Counter(
+    "fraud_dlq_events_produced_total",
+    "Total events sent to DLQ",
+    ["topic"],
+)
+CONSUMER_LAG = Gauge(
+    "fraud_validation_service_consumer_lag",
+    "Consumer lag for validation service",
+)
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -89,6 +114,9 @@ RESET  = "\033[0m"
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run():
+    setup_observability(service_name="validation-service", metrics_port=8004)
+    logger = get_logger()
+
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": GROUP_ID,
@@ -130,6 +158,8 @@ def run():
     total_failed = 0
     total_deser_errors = 0
     last_summary_time = time.time()
+    _last_lag_check = 0.0
+    _LAG_CHECK_INTERVAL = 10  # seconds
 
     def _print_summary():
         failure_rate = (total_failed / total_processed * 100) if total_processed else 0.0
@@ -197,6 +227,10 @@ def run():
                 )
                 dlq_producer.poll(0)
 
+                EVENTS_VALIDATED.labels(topic=topic, result="deser_error").inc()
+                DLQ_EVENTS_PRODUCED.labels(topic=topic).inc()
+                logger.warning("deser_error_routed_to_dlq", topic=topic, error=str(exc))
+
                 total_processed += 1
                 total_failed += 1
                 total_deser_errors += 1
@@ -221,6 +255,8 @@ def run():
                     or "unknown"
                 )
                 print(f"{GREEN}[VALID]{RESET}    topic={topic:<15} event_id={event_id}")
+                EVENTS_VALIDATED.labels(topic=topic, result="valid").inc()
+                logger.info("event_valid", topic=topic, event_id=event_id)
                 total_valid += 1
             else:
                 # Route to DLQ
@@ -240,6 +276,13 @@ def run():
                 )
                 dlq_producer.poll(0)
 
+                EVENTS_VALIDATED.labels(topic=topic, result="failed").inc()
+                DLQ_EVENTS_PRODUCED.labels(topic=topic).inc()
+                for err in errors:
+                    VALIDATION_FAILURES.labels(topic=topic, rule=err["rule"]).inc()
+                logger.warning("event_failed_validation", topic=topic,
+                               card_id=card_id, errors=errors)
+
                 print(
                     f"{RED}[FAILED]{RESET}   topic={topic:<15} "
                     f"card={card_id}  errors={errors}"
@@ -247,6 +290,22 @@ def run():
                 total_failed += 1
 
             consumer.commit(msg)
+
+            now = time.time()
+            if now - _last_lag_check >= _LAG_CHECK_INTERVAL:
+                try:
+                    total_lag = 0
+                    for tp in consumer.assignment():
+                        (low, high) = consumer.get_watermark_offsets(tp, timeout=5.0)
+                        committed_offsets = consumer.committed([tp], timeout=5.0)
+                        if committed_offsets and committed_offsets[0].offset >= 0:
+                            total_lag += high - committed_offsets[0].offset
+                        else:
+                            total_lag += high - low
+                    CONSUMER_LAG.set(total_lag)
+                except Exception:
+                    pass
+                _last_lag_check = now
 
             # ── Periodic summary ──────────────────────────────────────────────
             now = time.time()

@@ -1,0 +1,16 @@
+confluent-kafka==2.3.0
+fastavro==1.12.1
+python-dotenv==1.0.1
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.25
+certifi==2026.1.4
+requests==2.32.5
+
+
+prometheus_client>=0.20
+structlog>=24.0
+opentelemetry-api>=1.20
+opentelemetry-sdk>=1.20
+opentelemetry-exporter-otlp-proto-http>=1.20
+opentelemetry-instrumentation-confluent-kafka>=0.43b0
+opentelemetry-instrumentation-sqlalchemy>=0.43b0

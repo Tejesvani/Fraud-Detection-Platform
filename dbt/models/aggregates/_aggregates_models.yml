@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: agg_daily_fraud_summary
+    description: "Daily rollup of fraud metrics for dashboard consumption. Grain: one calendar date."
+    columns:
+      - name: summary_date
+        description: "Calendar date — grain of this table"
+        tests:
+          - unique
+          - not_null
+      - name: total_transactions
+        tests:
+          - not_null
+
+  - name: agg_hourly_card_velocity
+    description: "Hourly transaction velocity per card for velocity-based fraud detection. Grain: card_id + hour."
+    columns:
+      - name: card_id
+        tests:
+          - not_null
+      - name: hour_bucket
+        tests:
+          - not_null
+      - name: transaction_count
+        tests:
+          - not_null

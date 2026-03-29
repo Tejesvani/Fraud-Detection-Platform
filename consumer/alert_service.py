@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -18,7 +19,31 @@ except ImportError:
     pass
 
 from shared.schema_registry import get_avro_serializer, get_avro_deserializer
+from shared.observability import setup_observability, get_logger
 from data_quality.contracts.alert_contract import validate_alert
+
+# ── Prometheus metrics ─────────────────────────────────────────────────────────
+
+from prometheus_client import Counter, Histogram, Gauge
+
+ALERTS_GENERATED = Counter(
+    "fraud_alerts_generated_total",
+    "Total alerts generated",
+    ["severity"],  # 'INFO' | 'WARNING' | 'CRITICAL'
+)
+ALERTS_REJECTED = Counter(
+    "fraud_alert_events_rejected_total",
+    "Alert events rejected by validation",
+)
+ALERT_LATENCY = Histogram(
+    "fraud_alert_latency_seconds",
+    "Time to generate and produce an alert",
+    buckets=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1],
+)
+CONSUMER_LAG = Gauge(
+    "fraud_alert_service_consumer_lag",
+    "Consumer lag for alert service",
+)
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────────
@@ -108,6 +133,9 @@ def delivery_callback(err, msg):
 
 
 def run():
+    setup_observability(service_name="alert-service", metrics_port=8002)
+    logger = get_logger()
+
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": GROUP_ID,
@@ -142,6 +170,9 @@ def run():
     print(f"  producing to   : {OUTPUT_TOPIC}")
     print("Press Ctrl+C to stop\n")
 
+    _last_lag_check = 0.0
+    _LAG_CHECK_INTERVAL = 10  # seconds
+
     try:
         while True:
             msg = consumer.poll(timeout=1.0)
@@ -166,34 +197,60 @@ def run():
                 consumer.commit(msg)
                 continue
 
-            alert = build_alert(risk_event)
+            with ALERT_LATENCY.time():
+                alert = build_alert(risk_event)
 
-            # Layer 1 — producer-side validation (primary defense)
-            errors = validate_alert(alert)
-            if errors:
-                print(
-                    f"\033[91m[REJECTED] alert_id={alert['alert_id']} "
-                    f"errors: {errors}\033[0m"
+                # Layer 1 — producer-side validation (primary defense)
+                errors = validate_alert(alert)
+                if errors:
+                    print(
+                        f"\033[91m[REJECTED] alert_id={alert['alert_id']} "
+                        f"errors: {errors}\033[0m"
+                    )
+                    logger.warning("alert_rejected", alert_id=alert["alert_id"],
+                                   card_id=alert["card_id"], errors=errors)
+                    ALERTS_REJECTED.inc()
+                    consumer.commit(msg)
+                    continue
+
+                # Serialize
+                if alert_serializer is not None:
+                    ctx = SerializationContext(OUTPUT_TOPIC, MessageField.VALUE)
+                    value_bytes = alert_serializer(alert, ctx)
+                else:
+                    value_bytes = json.dumps(alert).encode("utf-8")
+
+                producer.produce(
+                    topic=OUTPUT_TOPIC,
+                    key=alert["card_id"],
+                    value=value_bytes,
+                    callback=delivery_callback,
                 )
-                consumer.commit(msg)
-                continue
+                producer.poll(0)
 
-            # Serialize
-            if alert_serializer is not None:
-                ctx = SerializationContext(OUTPUT_TOPIC, MessageField.VALUE)
-                value_bytes = alert_serializer(alert, ctx)
-            else:
-                value_bytes = json.dumps(alert).encode("utf-8")
-
-            producer.produce(
-                topic=OUTPUT_TOPIC,
-                key=alert["card_id"],
-                value=value_bytes,
-                callback=delivery_callback,
-            )
-            producer.poll(0)
+            ALERTS_GENERATED.labels(severity=alert["severity"]).inc()
+            logger.info("alert_generated", alert_id=alert["alert_id"],
+                        card_id=alert["card_id"], severity=alert["severity"],
+                        action=alert["action"],
+                        risk_event_id=alert["risk_event_id"])
 
             consumer.commit(msg)
+
+            now = time.time()
+            if now - _last_lag_check >= _LAG_CHECK_INTERVAL:
+                try:
+                    total_lag = 0
+                    for tp in consumer.assignment():
+                        (low, high) = consumer.get_watermark_offsets(tp, timeout=5.0)
+                        committed_offsets = consumer.committed([tp], timeout=5.0)
+                        if committed_offsets and committed_offsets[0].offset >= 0:
+                            total_lag += high - committed_offsets[0].offset
+                        else:
+                            total_lag += high - low
+                    CONSUMER_LAG.set(total_lag)
+                except Exception:
+                    pass
+                _last_lag_check = now
 
             print_alert(alert)
 

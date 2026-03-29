@@ -1,0 +1,84 @@
+version: 2
+
+models:
+  - name: fact_fraud_events
+    description: "Core analytical table. One row per transaction, pre-joined with risk score and alert outcome."
+    columns:
+      - name: event_id
+        description: "Transaction UUID primary key"
+        tests:
+          - unique
+          - not_null
+      - name: card_id
+        tests:
+          - not_null
+      - name: transaction_timestamp
+        tests:
+          - not_null
+      - name: transaction_type
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - pos_purchase
+                - online_purchase
+                - subscription
+                - high_value_retail
+                - atm_withdrawal
+                - international_purchase
+      - name: risk_label
+        tests:
+          - accepted_values:
+              values:
+                - LOW
+                - MEDIUM
+                - HIGH
+      - name: severity
+        tests:
+          - accepted_values:
+              values:
+                - INFO
+                - WARNING
+                - CRITICAL
+      - name: action
+        tests:
+          - accepted_values:
+              values:
+                - LOG_ONLY
+                - REVIEW_TRANSACTION
+                - BLOCK_CARD
+
+  - name: dim_cards
+    description: "Card-level dimension with aggregated fraud statistics."
+    columns:
+      - name: card_id
+        description: "Card identifier — grain of this table"
+        tests:
+          - unique
+          - not_null
+      - name: total_transactions
+        tests:
+          - not_null
+      - name: fraud_rate_pct
+        description: "Percentage of flagged transactions. Must be between 0 and 100."
+
+  - name: dim_merchants
+    description: "Merchant category dimension with aggregated fraud statistics."
+    columns:
+      - name: merchant_category
+        description: "Merchant category — grain of this table"
+        tests:
+          - unique
+          - not_null
+      - name: total_transactions
+        tests:
+          - not_null
+
+  - name: dim_dates
+    description: "Standard date dimension covering the full range of transaction dates."
+    columns:
+      - name: date_key
+        description: "Calendar date — grain of this table"
+        tests:
+          - unique
+          - not_null

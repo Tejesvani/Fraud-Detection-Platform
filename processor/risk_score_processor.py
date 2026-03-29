@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -18,7 +19,36 @@ except ImportError:
     pass
 
 from shared.schema_registry import get_avro_serializer, get_avro_deserializer
+from shared.observability import setup_observability, get_logger
 from data_quality.contracts.risk_score_contract import validate_risk_score
+
+# ── Prometheus metrics ─────────────────────────────────────────────────────────
+
+from prometheus_client import Counter, Histogram, Gauge
+
+EVENTS_SCORED = Counter(
+    "fraud_events_scored_total",
+    "Total events scored",
+    ["risk_label"],  # 'LOW' | 'MEDIUM' | 'HIGH'
+)
+EVENTS_REJECTED = Counter(
+    "fraud_risk_events_rejected_total",
+    "Risk events rejected by validation",
+)
+SCORING_LATENCY = Histogram(
+    "fraud_scoring_latency_seconds",
+    "Time to score a transaction",
+    buckets=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1],
+)
+RISK_SCORE_HISTOGRAM = Histogram(
+    "fraud_risk_score_distribution",
+    "Distribution of risk scores",
+    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+)
+CONSUMER_LAG = Gauge(
+    "fraud_risk_processor_consumer_lag",
+    "Consumer lag for risk processor",
+)
 
 
 # ── Risk label enum ────────────────────────────────────────────────────────────
@@ -144,6 +174,9 @@ def delivery_callback(err, msg):
 
 
 def run():
+    setup_observability(service_name="risk-processor", metrics_port=8001)
+    logger = get_logger()
+
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": GROUP_ID,
@@ -178,6 +211,9 @@ def run():
     print(f"  producing to   : {OUTPUT_TOPIC}")
     print("Press Ctrl+C to stop\n")
 
+    _last_lag_check = 0.0
+    _LAG_CHECK_INTERVAL = 10  # seconds
+
     try:
         while True:
             msg = consumer.poll(timeout=1.0)
@@ -203,7 +239,11 @@ def run():
                 consumer.commit(msg)
                 continue
 
-            risk_event = score_transaction(txn)
+            with SCORING_LATENCY.time():
+                risk_event = score_transaction(txn)
+
+            EVENTS_SCORED.labels(risk_label=risk_event["risk_label"]).inc()
+            RISK_SCORE_HISTOGRAM.observe(risk_event["risk_score"])
 
             # Layer 1 — producer-side validation (primary defense)
             errors = validate_risk_score(risk_event)
@@ -212,8 +252,20 @@ def run():
                     f"\033[91m[REJECTED] risk_event_id={risk_event['risk_event_id']} "
                     f"errors: {errors}\033[0m"
                 )
+                logger.warning("risk_event_rejected",
+                               risk_event_id=risk_event["risk_event_id"],
+                               card_id=risk_event["card_id"], errors=errors)
+                EVENTS_REJECTED.inc()
                 consumer.commit(msg)
                 continue
+
+            logger.info("risk_event_scored",
+                        risk_event_id=risk_event["risk_event_id"],
+                        transaction_event_id=risk_event["transaction_event_id"],
+                        card_id=risk_event["card_id"],
+                        risk_score=risk_event["risk_score"],
+                        risk_label=risk_event["risk_label"],
+                        reasons=risk_event["reasons"])
 
             # Serialize: Avro or JSON
             if risk_serializer is not None:
@@ -231,6 +283,22 @@ def run():
             producer.poll(0)
 
             consumer.commit(msg)
+
+            now = time.time()
+            if now - _last_lag_check >= _LAG_CHECK_INTERVAL:
+                try:
+                    total_lag = 0
+                    for tp in consumer.assignment():
+                        (low, high) = consumer.get_watermark_offsets(tp, timeout=5.0)
+                        committed_offsets = consumer.committed([tp], timeout=5.0)
+                        if committed_offsets and committed_offsets[0].offset >= 0:
+                            total_lag += high - committed_offsets[0].offset
+                        else:
+                            total_lag += high - low
+                    CONSUMER_LAG.set(total_lag)
+                except Exception:
+                    pass
+                _last_lag_check = now
 
             print_risk_event(risk_event, txn)
 

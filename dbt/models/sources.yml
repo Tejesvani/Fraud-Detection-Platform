@@ -1,0 +1,46 @@
+version: 2
+
+sources:
+  - name: raw
+    description: "Raw event tables populated by the Kafka persistence service"
+    database: fraud_detection_db
+    schema: public
+    tables:
+      - name: transactions
+        description: "Raw transaction events from the transactions Kafka topic"
+        columns:
+          - name: event_id
+            description: "UUID v4 primary key"
+            tests:
+              - unique
+              - not_null
+        loaded_at_field: created_at
+        freshness:
+          warn_after: {count: 10, period: minute}
+          error_after: {count: 30, period: minute}
+
+      - name: risk_scores
+        description: "Risk scoring results from the risk_scores Kafka topic"
+        columns:
+          - name: risk_event_id
+            description: "UUID v4 primary key"
+            tests:
+              - unique
+              - not_null
+        loaded_at_field: created_at
+        freshness:
+          warn_after: {count: 10, period: minute}
+          error_after: {count: 30, period: minute}
+
+      - name: alerts
+        description: "Alert events from the alerts Kafka topic"
+        columns:
+          - name: alert_id
+            description: "UUID v4 primary key"
+            tests:
+              - unique
+              - not_null
+        loaded_at_field: inserted_at
+        freshness:
+          warn_after: {count: 10, period: minute}
+          error_after: {count: 30, period: minute}

@@ -124,7 +124,7 @@ services:
     build:
       context: .
       dockerfile: producer/Dockerfile
-    container_name: transaction-streamer
+    # container_name: transaction-streamer
     depends_on:
       kafka:
         condition: service_healthy
@@ -136,6 +136,10 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      METRICS_PORT: "8000"
+    expose:
+      - "8000"
     restart: on-failure
 
   risk-processor:
@@ -154,6 +158,10 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      METRICS_PORT: "8001"
+    expose:
+      - "8001"
     restart: on-failure
 
   alert-service:
@@ -172,6 +180,10 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      METRICS_PORT: "8002"
+    expose:
+      - "8002"
     restart: on-failure
 
   persistence-service:
@@ -193,6 +205,10 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
       POSTGRES_HOST: postgres
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      METRICS_PORT: "8003"
+    expose:
+      - "8003"
     restart: on-failure
 
   validation-service:
@@ -211,6 +227,10 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      METRICS_PORT: "8004"
+    expose:
+      - "8004"
     restart: on-failure
 
   frontend:
@@ -233,5 +253,128 @@ services:
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
     restart: on-failure
 
+  reconciliation:
+    build:
+      context: .
+      dockerfile: reconciliation/Dockerfile
+    container_name: reconciliation
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      POSTGRES_HOST: postgres
+    restart: "no"
+    profiles:
+      - tools
+
+  dbt:
+    build:
+      context: ./dbt
+      dockerfile: Dockerfile
+    container_name: dbt
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+    restart: "no"
+    # Delay start to let the persistence service populate some data first
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "Waiting 60s for data to accumulate..."
+        sleep 60
+        echo "Running dbt..."
+        dbt run --profiles-dir .
+        echo "Running dbt tests..."
+        dbt test --profiles-dir .
+        echo "dbt complete."
+
+  # ── Monitoring infrastructure ─────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki:/etc/loki
+      - loki_data:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.4
+    container_name: promtail
+    volumes:
+      - ./monitoring/promtail:/etc/promtail
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/promtail-config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.3.1
+    container_name: tempo
+    ports:
+      - "3200:3200"   # Tempo HTTP
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    volumes:
+      - ./monitoring/tempo:/etc/tempo
+      - tempo_data:/var/tempo
+    command: -config.file=/etc/tempo/tempo-config.yml
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  tempo_data:
