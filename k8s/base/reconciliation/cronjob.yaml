@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: reconciliation
+  namespace: fraud-detection
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          containers:
+            - name: reconciliation
+              image: ghcr.io/tejesvani/fraud-detection-platform/reconciliation:latest
+              envFrom:
+                - configMapRef:
+                    name: fraud-detection-config
+                - secretRef:
+                    name: fraud-detection-secrets
+              resources:
+                requests:
+                  memory: 128Mi
+                  cpu: 100m
+                limits:
+                  memory: 256Mi
+                  cpu: 250m
+          restartPolicy: OnFailure

@@ -1,6 +1,9 @@
 # Virtual environment
 venv/
 
+logs/
+logs.txt
+
 # Python
 __pycache__/
 *.py[cod]
@@ -11,6 +14,7 @@ build/
 # IDE
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
@@ -24,6 +28,8 @@ dbt/target/
 dbt/dbt_packages/
 dbt/logs/
 
+
+
 # Monitoring volume data
 monitoring/loki/data/
 monitoring/grafana/data/
@@ -32,3 +38,6 @@ monitoring/prometheus/data/
 
 # Environment variables
 .env
+
+# Kubernetes secrets (never commit)
+k8s/base/secret.yaml

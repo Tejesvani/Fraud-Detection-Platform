@@ -1,0 +1,46 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: transactions
+  namespace: fraud-detection
+  labels:
+    strimzi.io/cluster: fraud-detection-kafka
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: risk-scores
+  namespace: fraud-detection
+  labels:
+    strimzi.io/cluster: fraud-detection-kafka
+spec:
+  topicName: risk_scores
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: alerts
+  namespace: fraud-detection
+  labels:
+    strimzi.io/cluster: fraud-detection-kafka
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: dlq
+  namespace: fraud-detection
+  labels:
+    strimzi.io/cluster: fraud-detection-kafka
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    retention.ms: "604800000"
