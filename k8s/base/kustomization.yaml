@@ -6,7 +6,6 @@ namespace: fraud-detection
 resources:
   - namespace.yaml
   - configmap.yaml
-  - secret.yaml
 
   # Infrastructure
   - kafka/kafka-cluster.yaml

@@ -72,10 +72,10 @@ spec:
           resources:
             requests:
               memory: 256Mi
-              cpu: 250m
+              cpu: 100m
             limits:
-              memory: 1Gi
-              cpu: 500m
+              memory: 512Mi
+              cpu: 200m
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
@@ -94,10 +94,8 @@ metadata:
   name: prometheus
   namespace: fraud-detection
 spec:
-  type: NodePort
   selector:
     app: prometheus
   ports:
     - port: 9090
       targetPort: 9090
-      nodePort: 30090

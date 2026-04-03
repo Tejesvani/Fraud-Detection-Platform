@@ -13,6 +13,8 @@ spec:
       backoffLimit: 2
       template:
         spec:
+          imagePullSecrets:
+            - name: ghcr-secret
           containers:
             - name: dbt
               image: ghcr.io/tejesvani/fraud-detection-platform/dbt:latest
@@ -24,9 +26,9 @@ spec:
               command: ["sh", "-c", "dbt run --profiles-dir . && dbt test --profiles-dir ."]
               resources:
                 requests:
+                  memory: 128Mi
+                  cpu: 100m
+                limits:
                   memory: 256Mi
                   cpu: 250m
-                limits:
-                  memory: 512Mi
-                  cpu: 500m
           restartPolicy: OnFailure

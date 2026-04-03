@@ -60,7 +60,8 @@ services:
       start_period: 30s
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:7.5.0
+    image: confluentinc/cp-schema-registry:7.6.1
+    # image: confluentinc/cp-schema-registry:8.2.0
     container_name: schema-registry
     depends_on:
       kafka:

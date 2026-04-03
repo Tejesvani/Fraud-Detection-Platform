@@ -21,7 +21,21 @@ patches:
         value: 1
   - target:
       kind: Deployment
+      name: alert-service
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
       name: persistence-service
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: validation-service
     patch: |
       - op: replace
         path: /spec/replicas

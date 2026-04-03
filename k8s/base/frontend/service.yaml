@@ -4,10 +4,9 @@ metadata:
   name: frontend
   namespace: fraud-detection
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: frontend
   ports:
     - port: 8501
       targetPort: 8501
-      nodePort: 30501

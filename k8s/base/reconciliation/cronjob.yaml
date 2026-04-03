@@ -13,6 +13,8 @@ spec:
       backoffLimit: 2
       template:
         spec:
+          imagePullSecrets:
+            - name: ghcr-secret
           containers:
             - name: reconciliation
               image: ghcr.io/tejesvani/fraud-detection-platform/reconciliation:latest
@@ -23,9 +25,9 @@ spec:
                     name: fraud-detection-secrets
               resources:
                 requests:
+                  memory: 64Mi
+                  cpu: 50m
+                limits:
                   memory: 128Mi
                   cpu: 100m
-                limits:
-                  memory: 256Mi
-                  cpu: 250m
           restartPolicy: OnFailure

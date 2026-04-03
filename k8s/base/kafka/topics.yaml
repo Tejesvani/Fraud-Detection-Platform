@@ -44,3 +44,20 @@ spec:
   replicas: 1
   config:
     retention.ms: "604800000"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: schemas
+  namespace: fraud-detection
+  labels:
+    strimzi.io/cluster: fraud-detection-kafka
+spec:
+  topicName: _schemas
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: compact        
+    retention.ms: "-1"             
+    min.insync.replicas: "1"
+
