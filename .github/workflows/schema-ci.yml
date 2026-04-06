@@ -31,7 +31,8 @@ jobs:
           - 9092:9092
 
       schema-registry:
-        image: confluentinc/cp-schema-registry:7.5.0
+        image: confluentinc/cp-schema-registry:7.6.1
+        # image: confluentinc/cp-schema-registry:8.2.0
         env:
           SCHEMA_REGISTRY_HOST_NAME: schema-registry
           SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092

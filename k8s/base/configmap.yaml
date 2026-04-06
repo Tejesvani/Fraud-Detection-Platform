@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fraud-detection-config
+  namespace: fraud-detection
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "fraud-detection-kafka-kafka-bootstrap:9092"
+  KAFKA_TOPIC_TRANSACTIONS: "transactions"
+  KAFKA_TOPIC_RISK_SCORES: "risk_scores"
+  KAFKA_TOPIC_ALERTS: "alerts"
+  KAFKA_TOPIC_DLQ: "dlq"
+  KAFKA_GROUP_RISK_PROCESSOR: "risk-score-processor-group"
+  KAFKA_GROUP_ALERT_SERVICE: "alert-service-group"
+  KAFKA_GROUP_PERSISTENCE: "persistence-service-group"
+  KAFKA_GROUP_VALIDATION: "validation-service-group"
+  SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+  SCHEMA_REGISTRY_ENABLED: "true"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "fraud_detection_db"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4318"
+  OTEL_ENABLED: "true"
+  METRICS_ENABLED: "true"
+  RECONCILIATION_THRESHOLD_PCT: "99.9"
+  RECONCILIATION_TOLERANCE_MINUTES: "5"

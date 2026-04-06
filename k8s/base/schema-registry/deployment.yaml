@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "9"
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"name":"schema-registry","namespace":"fraud-detection"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"schema-registry"}},"template":{"metadata":{"labels":{"app":"schema-registry"}},"spec":{"containers":[{"env":[{"name":"SCHEMA_REGISTRY_HOST_NAME","value":"schema-registry"},{"name":"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS","value":"fraud-detection-kafka-kafka-bootstrap:9092"},{"name":"SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL","value":"PLAINTEXT"},{"name":"SCHEMA_REGISTRY_LISTENERS","value":"http://0.0.0.0:8081"},{"name":"SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL","value":"BACKWARD"},{"name":"SCHEMA_REGISTRY_KAFKASTORE_TOPIC","value":"_schemas"},{"name":"SCHEMA_REGISTRY_HEAP_OPTS","value":"-Xms256m -Xmx512m"}],"image":"confluentinc/cp-schema-registry:7.6.1","livenessProbe":{"failureThreshold":5,"httpGet":{"path":"/subjects","port":8081},"initialDelaySeconds":90,"periodSeconds":15},"name":"schema-registry","ports":[{"containerPort":8081}],"readinessProbe":{"failureThreshold":10,"httpGet":{"path":"/subjects","port":8081},"initialDelaySeconds":60,"periodSeconds":10},"resources":{"limits":{"cpu":"200m","memory":"768Mi"},"requests":{"cpu":"100m","memory":"512Mi"}}}],"enableServiceLinks":false}}}}
+  creationTimestamp: "2026-04-02T19:41:51Z"
+  generation: 9
+  name: schema-registry
+  namespace: fraud-detection
+  resourceVersion: "473612"
+  uid: 43ddd244-75f6-4d05-a9ad-a55ec39aab61
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: schema-registry
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/restartedAt: "2026-04-02T19:38:18-04:00"
+      labels:
+        app: schema-registry
+    spec:
+      containers:
+      - env:
+        - name: SCHEMA_REGISTRY_HOST_NAME
+          value: schema-registry
+        - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+          value: fraud-detection-kafka-kafka-bootstrap:9092
+        - name: SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL
+          value: PLAINTEXT
+        - name: SCHEMA_REGISTRY_LISTENERS
+          value: http://0.0.0.0:8081
+        - name: SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL
+          value: BACKWARD
+        - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC
+          value: _schemas
+        - name: SCHEMA_REGISTRY_HEAP_OPTS
+          value: -Xms256m -Xmx512m
+        image: confluentinc/cp-schema-registry:7.6.1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 6
+          httpGet:
+            path: /subjects
+            port: 8081
+            scheme: HTTP
+          initialDelaySeconds: 120
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: schema-registry
+        ports:
+        - containerPort: 8081
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 12
+          httpGet:
+            path: /subjects
+            port: 8081
+            scheme: HTTP
+          initialDelaySeconds: 90
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: 200m
+            memory: 768Mi
+          requests:
+            cpu: 100m
+            memory: 512Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: false
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+status:
+  availableReplicas: 1
+  conditions:
+  - lastTransitionTime: "2026-04-03T00:21:11Z"
+    lastUpdateTime: "2026-04-03T00:21:11Z"
+    message: Deployment has minimum availability.
+    reason: MinimumReplicasAvailable
+    status: "True"
+    type: Available
+  - lastTransitionTime: "2026-04-03T00:17:19Z"
+    lastUpdateTime: "2026-04-03T00:21:11Z"
+    message: ReplicaSet "schema-registry-5ccd856576" has successfully progressed.
+    reason: NewReplicaSetAvailable
+    status: "True"
+    type: Progressing
+  observedGeneration: 9
+  readyReplicas: 1
+  replicas: 1
+  updatedReplicas: 1

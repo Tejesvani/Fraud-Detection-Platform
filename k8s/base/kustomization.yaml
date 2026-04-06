@@ -1,0 +1,34 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: fraud-detection
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+
+  # Infrastructure
+  - kafka/kafka-cluster.yaml
+  - kafka/topics.yaml
+  - schema-registry/deployment.yaml
+  - postgres/statefulset.yaml
+  - postgres/init-configmap.yaml
+
+  # Application services
+  - streamer/deployment.yaml
+  - processor/deployment.yaml
+  - alert-service/deployment.yaml
+  - persistence-service/deployment.yaml
+  - validation-service/deployment.yaml
+  - frontend/deployment.yaml
+  - frontend/service.yaml
+
+  # Batch jobs
+  - dbt/cronjob.yaml
+  - reconciliation/cronjob.yaml
+
+  # Monitoring
+  - monitoring/prometheus.yaml
+  - monitoring/grafana.yaml
+  - monitoring/loki.yaml
+  - monitoring/tempo.yaml

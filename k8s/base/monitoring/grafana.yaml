@@ -1,0 +1,600 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: fraud-detection
+data:
+  datasources.yaml: |
+    apiVersion: 1
+
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        uid: prometheus
+
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        uid: loki
+
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://tempo:3200
+        uid: tempo
+
+      - name: PostgreSQL
+        type: postgres
+        access: proxy
+        url: postgres:5432
+        database: fraud_detection_db
+        user: $POSTGRES_USER
+        uid: postgresql
+        secureJsonData:
+          password: $POSTGRES_PASSWORD
+        jsonData:
+          sslmode: disable
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: fraud-detection
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+
+    providers:
+      - name: "Fraud Detection Platform"
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: fraud-detection
+data:
+  pipeline-health.json: |
+    {
+      "uid": "fraud-pipeline-health",
+      "title": "Fraud Detection — Pipeline Health",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "timezone": "browser",
+      "panels": [
+        {
+          "id": 1,
+          "title": "Transaction Throughput (produced/sec)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(rate(fraud_transactions_produced_total{status=\"success\"}[1m]))", "legendFormat": "success/sec", "refId": "A" },
+            { "expr": "sum(rate(fraud_transactions_produced_total{status=\"rejected\"}[1m]))", "legendFormat": "rejected/sec", "refId": "B" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+          "options": { "tooltip": { "mode": "multi" } }
+        },
+        {
+          "id": 2,
+          "title": "Scoring Latency p50 / p95 (seconds)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "histogram_quantile(0.5, sum by (le) (rate(fraud_scoring_latency_seconds_bucket[5m])))", "legendFormat": "p50", "refId": "A" },
+            { "expr": "histogram_quantile(0.95, sum by (le) (rate(fraud_scoring_latency_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "B" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 3,
+          "title": "DB Write Latency p95 by Topic (seconds)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "histogram_quantile(0.95, sum by (le, topic) (rate(fraud_db_write_latency_seconds_bucket[5m])))", "legendFormat": "p95 {{topic}}", "refId": "A" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 4,
+          "title": "End-to-End Latency p50 / p95 (ms)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [
+            {
+              "rawSql": "SELECT DATE_TRUNC('minute', transaction_timestamp) AS time, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY end_to_end_latency_ms) AS p50_ms, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY end_to_end_latency_ms) AS p95_ms FROM analytics.fact_fraud_events WHERE transaction_timestamp BETWEEN $__timeFrom() AND $__timeTo() GROUP BY 1 ORDER BY 1",
+              "format": "time_series",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms", "min": 0, "color": { "mode": "palette-classic" } } }
+        },
+        {
+          "id": 5,
+          "title": "Pipeline Stage Throughput (events/sec)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 16, "w": 24, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(rate(fraud_transactions_produced_total{status=\"success\"}[1m]))", "legendFormat": "produced", "refId": "A" },
+            { "expr": "sum(rate(fraud_events_scored_total[1m]))", "legendFormat": "scored", "refId": "B" },
+            { "expr": "sum(rate(fraud_events_persisted_total[1m]))", "legendFormat": "persisted", "refId": "C" },
+            { "expr": "sum(rate(fraud_alerts_generated_total[1m]))", "legendFormat": "alerted", "refId": "D" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 5 } } },
+          "options": { "tooltip": { "mode": "multi" } }
+        },
+        {
+          "id": 6,
+          "title": "Consumer Lag (all services)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(fraud_risk_processor_consumer_lag)", "legendFormat": "risk-processor", "refId": "A" },
+            { "expr": "sum(fraud_alert_service_consumer_lag)", "legendFormat": "alert-service", "refId": "B" },
+            { "expr": "sum(fraud_persistence_service_consumer_lag)", "legendFormat": "persistence-service", "refId": "C" },
+            { "expr": "sum(fraud_validation_service_consumer_lag)", "legendFormat": "validation-service", "refId": "D" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "min": 0,
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 2, "fillOpacity": 10 },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 100 }] }
+            }
+          },
+          "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "max"] } }
+        }
+      ]
+    }
+  fraud-overview.json: |
+    {
+      "uid": "fraud-overview",
+      "title": "Fraud Detection — Overview",
+      "schemaVersion": 38,
+      "version": 3,
+      "refresh": "30s",
+      "time": { "from": "now-6h", "to": "now" },
+      "timezone": "browser",
+      "panels": [
+        {
+          "id": 1, "title": "Total Transactions", "type": "stat",
+          "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT COUNT(*) AS value FROM public.transactions WHERE transaction_timestamp > NOW() - INTERVAL '6 hours'", "format": "table", "refId": "A" }],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } } }
+        },
+        {
+          "id": 2, "title": "Flagged Transactions", "type": "stat",
+          "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT COUNT(*) AS value FROM analytics.fact_fraud_events WHERE is_flagged = true AND transaction_timestamp > NOW() - INTERVAL '6 hours'", "format": "table", "refId": "A" }],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }] } } }
+        },
+        {
+          "id": 3, "title": "Blocked Cards", "type": "stat",
+          "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT COUNT(*) AS value FROM public.alerts WHERE severity = 'CRITICAL' AND created_at > NOW() - INTERVAL '6 hours'", "format": "table", "refId": "A" }],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+        },
+        {
+          "id": 4, "title": "Avg Risk Score", "type": "stat",
+          "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT ROUND(AVG(risk_score)::numeric, 3) AS value FROM public.risk_scores WHERE created_at > NOW() - INTERVAL '6 hours'", "format": "table", "refId": "A" }],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 3, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 0.7 }] } } }
+        },
+        {
+          "id": 5, "title": "Risk Label Distribution", "type": "piechart",
+          "transformations": [
+            {
+              "id": "rowsToFields",
+              "options": {
+                "mappings": [
+                  { "fieldName": "metric", "handlerKey": "field.name" },
+                  { "fieldName": "value", "handlerKey": "field.value" }
+                ]
+              }
+            }
+          ],
+          "gridPos": { "x": 0, "y": 4, "w": 8, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT risk_label AS metric, COUNT(*) AS value FROM public.risk_scores WHERE created_at > NOW() - INTERVAL '6 hours' GROUP BY risk_label ORDER BY value DESC", "format": "table", "refId": "A" }],
+          "options": { "pieType": "pie", "displayLabels": ["name", "percent"], "legend": { "displayMode": "list", "placement": "right" } },
+          "fieldConfig": {
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "metric" }, "properties": [{ "id": "custom.hideFrom", "value": { "tooltip": false, "viz": false, "legend": false } }] }
+            ]
+          }
+        },
+        {
+          "id": 6, "title": "Alerts by Severity & Action", "type": "piechart",
+          "transformations": [
+            {
+              "id": "rowsToFields",
+              "options": {
+                "mappings": [
+                  { "fieldName": "metric", "handlerKey": "field.name" },
+                  { "fieldName": "value", "handlerKey": "field.value" }
+                ]
+              }
+            }
+          ],
+          "gridPos": { "x": 8, "y": 4, "w": 8, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT severity AS metric, COUNT(*) AS value FROM public.alerts WHERE created_at > NOW() - INTERVAL '6 hours' GROUP BY severity ORDER BY value DESC", "format": "table", "refId": "A" }],
+          "options": { "pieType": "pie", "displayLabels": ["name", "percent"], "legend": { "displayMode": "list", "placement": "right" } },
+          "fieldConfig": {
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "metric" }, "properties": [{ "id": "custom.hideFrom", "value": { "tooltip": false, "viz": false, "legend": false } }] }
+            ]
+          }
+        },
+        {
+          "id": 7, "title": "Top Transaction Types by Fraud", "type": "piechart",
+          "transformations": [
+            {
+              "id": "rowsToFields",
+              "options": {
+                "mappings": [
+                  { "fieldName": "metric", "handlerKey": "field.name" },
+                  { "fieldName": "value", "handlerKey": "field.value" }
+                ]
+              }
+            }
+          ],
+          "gridPos": { "x": 16, "y": 4, "w": 8, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT transaction_type AS metric, SUM(CASE WHEN is_flagged THEN 1 ELSE 0 END) AS value FROM analytics.fact_fraud_events WHERE transaction_timestamp > NOW() - INTERVAL '6 hours' GROUP BY transaction_type ORDER BY value DESC", "format": "table", "refId": "A" }],
+          "options": { "pieType": "pie", "displayLabels": ["name", "percent"], "legend": { "displayMode": "list", "placement": "right" } },
+          "fieldConfig": {
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "metric" }, "properties": [{ "id": "custom.hideFrom", "value": { "tooltip": false, "viz": false, "legend": false } }] }
+            ]
+          }
+        },
+        {
+          "id": 8, "title": "Avg Risk Score by Country", "type": "barchart",
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT country, ROUND(AVG(risk_score)::numeric, 3) AS avg_risk_score FROM analytics.fact_fraud_events WHERE transaction_timestamp > NOW() - INTERVAL '6 hours' GROUP BY country ORDER BY avg_risk_score DESC LIMIT 12", "format": "table", "refId": "A" }],
+          "options": { "xField": "country", "orientation": "auto", "legend": { "displayMode": "list", "placement": "bottom" } },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "thresholds" }, "unit": "short",
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 0.6 }] }
+            }
+          }
+        },
+        {
+          "id": 9, "title": "Fraud by Merchant Category", "type": "barchart",
+          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT merchant_category, SUM(CASE WHEN is_flagged THEN 1 ELSE 0 END) AS flagged, COUNT(*) AS total, ROUND(100.0 * SUM(CASE WHEN is_flagged THEN 1 ELSE 0 END) / COUNT(*), 1) AS flag_rate_pct FROM analytics.fact_fraud_events WHERE transaction_timestamp > NOW() - INTERVAL '6 hours' GROUP BY merchant_category ORDER BY flagged DESC LIMIT 10", "format": "table", "refId": "A" }],
+          "options": { "xField": "merchant_category", "orientation": "auto", "legend": { "displayMode": "list", "placement": "bottom" } },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } }
+        },
+        {
+          "id": 10, "title": "Fraud Rate Over Time (hourly)", "type": "timeseries",
+          "gridPos": { "x": 0, "y": 20, "w": 24, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT date_trunc('hour', transaction_timestamp) AS time, COUNT(*) AS total, SUM(CASE WHEN is_flagged THEN 1 ELSE 0 END) AS flagged, ROUND(100.0 * SUM(CASE WHEN is_flagged THEN 1 ELSE 0 END) / COUNT(*), 2) AS flag_rate_pct FROM analytics.fact_fraud_events WHERE transaction_timestamp > NOW() - INTERVAL '24 hours' GROUP BY 1 ORDER BY 1", "format": "time_series", "refId": "A" }],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+            "overrides": [{ "matcher": { "id": "byName", "options": "flag_rate_pct" }, "properties": [{ "id": "unit", "value": "percent" }] }]
+          },
+          "options": { "tooltip": { "mode": "multi" } }
+        },
+        {
+          "id": 11, "title": "Recent High-Risk & Blocked Transactions", "type": "table",
+          "gridPos": { "x": 0, "y": 28, "w": 24, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT f.card_id, f.amount, f.country, f.transaction_type, f.merchant_category, f.risk_score, f.risk_label, f.severity, f.action, f.scoring_latency_ms, f.end_to_end_latency_ms, f.transaction_timestamp FROM analytics.fact_fraud_events f WHERE f.risk_label IN ('HIGH', 'MEDIUM') ORDER BY f.transaction_timestamp DESC LIMIT 50", "format": "table", "refId": "A" }],
+          "options": { "cellHeight": "sm" },
+          "fieldConfig": {
+            "defaults": { "custom": { "align": "auto" } },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "risk_score" }, "properties": [{ "id": "unit", "value": "short" }, { "id": "custom.displayMode", "value": "color-background" }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 0.7 }] } }] },
+              { "matcher": { "id": "byName", "options": "amount" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] }
+            ]
+          }
+        }
+      ]
+    }
+  data-quality.json: |
+    {
+      "uid": "fraud-data-quality",
+      "title": "Fraud Detection — Data Quality",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "timezone": "browser",
+      "panels": [
+        {
+          "id": 1, "title": "Reconciliation Match Rate by Topic", "type": "table",
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT DISTINCT ON (topic) topic, kafka_available, kafka_committed, postgres_count, delta, match_rate_pct, status, run_timestamp AS last_checked FROM public.reconciliation_log ORDER BY topic, run_timestamp DESC", "format": "table", "refId": "A" }],
+          "options": { "cellHeight": "sm" },
+          "fieldConfig": {
+            "defaults": { "custom": { "align": "auto" } },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "match_rate_pct" }, "properties": [{ "id": "unit", "value": "percent" }, { "id": "custom.displayMode", "value": "color-background" }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 95 }, { "color": "green", "value": 99 }] } }] },
+              { "matcher": { "id": "byName", "options": "delta" }, "properties": [{ "id": "custom.displayMode", "value": "color-background" }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 100 }] } }] }
+            ]
+          }
+        },
+        {
+          "id": 2, "title": "Reconciliation Delta Trend by Topic", "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT run_timestamp AS time, delta, topic FROM public.reconciliation_log WHERE run_timestamp > NOW() - INTERVAL '1 hour' ORDER BY run_timestamp", "format": "time_series", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 3, "title": "DLQ Events/sec", "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(rate(fraud_dlq_events_produced_total[1m]))", "legendFormat": "DLQ events/sec", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.001 }] } } }
+        },
+        {
+          "id": 4, "title": "Validation Failures by Rule (rate/sec)", "type": "timeseries",
+          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum by (rule) (rate(fraud_validation_failures_total[1m]))", "legendFormat": "{{rule}}", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 5, "title": "Validation Pass / Fail Rate by Topic (events/sec)", "type": "timeseries",
+          "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum by (topic, result) (rate(fraud_events_validated_total[1m]))", "legendFormat": "{{topic}} / {{result}}", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        }
+      ]
+    }
+  kafka-metrics.json: |
+    {
+      "uid": "fraud-kafka-metrics",
+      "title": "Fraud Detection — Kafka Metrics",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "timezone": "browser",
+      "panels": [
+        {
+          "id": 1, "title": "Consumer Lag by Service", "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(fraud_risk_processor_consumer_lag)", "legendFormat": "risk-processor", "refId": "A" },
+            { "expr": "sum(fraud_alert_service_consumer_lag)", "legendFormat": "alert-service", "refId": "B" },
+            { "expr": "sum(fraud_persistence_service_consumer_lag)", "legendFormat": "persistence-service", "refId": "C" },
+            { "expr": "sum(fraud_validation_service_consumer_lag)", "legendFormat": "validation-service", "refId": "D" }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 100 }] }
+            }
+          },
+          "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "max"] } }
+        },
+        {
+          "id": 2, "title": "Pipeline Stage Throughput (events/sec)", "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 16, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(rate(fraud_transactions_produced_total{status=\"success\"}[1m]))", "legendFormat": "produced", "refId": "A" },
+            { "expr": "sum(rate(fraud_events_scored_total[1m]))", "legendFormat": "scored", "refId": "B" },
+            { "expr": "sum(rate(fraud_events_persisted_total[1m]))", "legendFormat": "persisted", "refId": "C" },
+            { "expr": "sum(rate(fraud_alerts_generated_total[1m]))", "legendFormat": "alerted", "refId": "D" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 3, "title": "DLQ Events/sec", "type": "stat",
+          "gridPos": { "x": 16, "y": 8, "w": 8, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(rate(fraud_dlq_events_produced_total[5m]))", "legendFormat": "DLQ rate", "refId": "A" }],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.001 }] } } }
+        },
+        {
+          "id": 4, "title": "Reconciliation Status (latest per topic)", "type": "table",
+          "gridPos": { "x": 0, "y": 16, "w": 24, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "targets": [{ "rawSql": "SELECT DISTINCT ON (topic) topic, kafka_available, kafka_committed, postgres_count, delta, match_rate_pct, status, run_timestamp AS last_checked FROM public.reconciliation_log ORDER BY topic, run_timestamp DESC", "format": "table", "refId": "A" }],
+          "options": { "cellHeight": "sm" },
+          "fieldConfig": {
+            "defaults": { "custom": { "align": "auto" } },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "match_rate_pct" }, "properties": [{ "id": "unit", "value": "percent" }, { "id": "custom.displayMode", "value": "color-background" }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 95 }, { "color": "green", "value": 99 }] } }] }
+            ]
+          }
+        }
+      ]
+    }
+  infra-health.json: |
+    {
+      "uid": "fraud-infra-health",
+      "title": "Fraud Detection — Infra Health",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "timezone": "browser",
+      "panels": [
+        {
+          "id": 1, "title": "CPU Usage per Service (%)", "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "rate(process_cpu_seconds_total{job=~\"transaction-streamer|risk-processor|alert-service|persistence-service|validation-service\"}[1m]) * 100", "legendFormat": "{{job}}", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 2, "title": "Memory Usage per Service (MiB)", "type": "timeseries",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "process_resident_memory_bytes{job=~\"transaction-streamer|risk-processor|alert-service|persistence-service|validation-service\"} / 1048576", "legendFormat": "{{job}}", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "mebibytes", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 3, "title": "Open File Descriptors per Service", "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "process_open_fds{job=~\"transaction-streamer|risk-processor|alert-service|persistence-service|validation-service\"}", "legendFormat": "{{job}}", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "short", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 4, "title": "Persist Errors (rate/sec)", "type": "timeseries",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(rate(fraud_persist_errors_total[1m]))", "legendFormat": "persist errors/sec", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.001 }] } } }
+        },
+        {
+          "id": 5, "title": "Alert Rejection Rate (rate/sec)", "type": "timeseries",
+          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(rate(fraud_alert_events_rejected_total[1m]))", "legendFormat": "alert rejections/sec", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 6, "title": "Risk Rejection Rate (rate/sec)", "type": "timeseries",
+          "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "sum(rate(fraud_risk_events_rejected_total[1m]))", "legendFormat": "risk rejections/sec", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } } }
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: fraud-detection
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.4.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "admin"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_PATHS_PROVISIONING
+              value: "/etc/grafana/provisioning"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: fraud-detection-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fraud-detection-secrets
+                  key: POSTGRES_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+              cpu: 100m
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+            - name: data
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: fraud-detection
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-external
+  namespace: fraud-detection
+spec:
+  type: LoadBalancer
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000

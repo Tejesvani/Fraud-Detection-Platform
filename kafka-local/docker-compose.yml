@@ -33,7 +33,8 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:7.5.0
+    image: confluentinc/cp-schema-registry:7.6.1
+    # image: confluentinc/cp-schema-registry:8.2.0
     container_name: schema-registry
     depends_on:
       - kafka

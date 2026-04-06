@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dbt-transform
+  namespace: fraud-detection
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          imagePullSecrets:
+            - name: ghcr-secret
+          containers:
+            - name: dbt
+              image: ghcr.io/tejesvani/fraud-detection-platform/dbt:latest
+              envFrom:
+                - configMapRef:
+                    name: fraud-detection-config
+                - secretRef:
+                    name: fraud-detection-secrets
+              command: ["sh", "-c", "dbt run --profiles-dir . && dbt test --profiles-dir ."]
+              resources:
+                requests:
+                  memory: 128Mi
+                  cpu: 100m
+                limits:
+                  memory: 256Mi
+                  cpu: 250m
+          restartPolicy: OnFailure
