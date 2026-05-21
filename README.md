@@ -7,6 +7,11 @@ A real-time fraud detection system built on Apache Kafka. Simulated card transac
 ## Architecture
 
 ```
+
+                                  STREAMING PIPELINE
+                                  ──────────────────
+
+
   PRODUCERS                    KAFKA BROKER (localhost:9092)              CONSUMERS
   ─────────                   ┌───────────────────────────┐              ─────────
                               │                           │
@@ -53,6 +58,37 @@ A real-time fraud detection system built on Apache Kafka. Simulated card transac
                               │  Persistence Service │──────> PostgreSQL
                               │                      │        (fraud_detection_db)
                               └──────────────────────┘
+
+
+                              STORAGE & ANALYTICS LAYER
+                              ─────────────────────────
+
+  ┌──────────────────┐      ┌──────────────────────────┐      ┌──────────────────┐      ┌──────────────────────────┐
+  │                  │      │                          │      │                  │      │                          │
+  │   Persistence    │ write│   PostgreSQL 16          │ read │   dbt CronJob    │ stg  │   PostgreSQL 16          │
+  │   Service        │─────>│   public schema          │─────>│   (scheduled)    │─────>│   analytics schema       │
+  │                  │UPSERT│                          │sched │                  │views │                          │
+  └──────────────────┘      │   • transactions         │      └──────────────────┘      │   • fact_fraud_events    │
+                            │   • risk_scores          │                                │   • agg_daily_fraud_*    │
+                            │   • alerts               │                                │   • agg_hourly_card_*    │
+                            │   • reconciliation_log   │                                │   • dim_cards            │
+                            │                          │                                │   • dim_dates            │
+                            │   managed-csi · 10Gi     │                                └─────────────┬────────────┘      
+                            └─────────────┬────────────┘                                              │
+                                          │ row counts                                                │ queries
+                                          ▼                                                           ▼
+                            ┌──────────────────────────┐                                ┌──────────────────────┐
+                            │                          │                                │                      │
+                            │  Reconciliation CronJob  │─────> Kafka offsets            │   Streamlit UI       │
+                            │  (scheduled)             │       match rate: 100%         │   (dashboards)       │
+                            │                          │                                │                      │
+                            │  topics: transactions    │                                └──────────────────────┘
+                            │          risk_scores     │                                
+                            │          alerts          │                                                          
+                            └──────────────────────────┘                                
+
+
+
 ```
 
 `L1✓` — producer-side validation (Layer 1) is applied before every produce call. Invalid events are rejected at the source and never enter the stream.
